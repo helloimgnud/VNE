@@ -1,0 +1,326 @@
+import random
+import copy
+import math
+import numpy as np
+from multiprocessing import Pool, cpu_count
+
+# ============================================================
+# FAST HPSO CORE
+# ============================================================
+from algorithms.fast_hpso import (
+    fast_fitness,
+    build_and_reserve,
+    init_particles_hpso,
+    operation_minus,
+    operation_plus,
+    operation_multiply,
+    sa_neighbor,
+    INFEASIBLE_PENALTY
+)
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+EPS = 1e-9
+
+W_MAX = 0.9
+W_MIN = 0.4
+BETA = 0.3
+GAMMA = 0.3
+
+T0 = 100
+COOLING_RATE = 0.95
+
+TRANSFER_START_GEN = 5
+
+# SPAC PARAMETERS
+MATURITY_GEN = 15
+STAGE_RATIO = 0.3
+
+# ============================================================
+# Individual
+# ============================================================
+
+def resource_demand(vnr):
+    cpu = sum(vnr.nodes[v]['cpu'] for v in vnr.nodes())
+    bw = sum(vnr.edges[e]['bw'] for e in vnr.edges())
+    return cpu + bw
+
+
+class Individual:
+    def __init__(self, particle, velocity, cost):
+        self.particle = particle
+        self.velocity = velocity
+        self.cost = cost
+
+
+# ============================================================
+# RMP / Similarity
+# ============================================================
+
+def build_probabilistic_model(pop):
+    model = {}
+    for ind in pop:
+        for i, s in enumerate(ind.particle):
+            model[(i, s)] = model.get((i, s), 0) + 1
+    total = sum(model.values()) + EPS
+    for k in model:
+        model[k] /= total
+    return model
+
+
+def kl_divergence(p, q):
+    keys = set(p) | set(q)
+    return sum(
+        p.get(k, EPS) * math.log(p.get(k, EPS) / q.get(k, EPS))
+        for k in keys
+    )
+
+
+def build_rmp_matrix(populations):
+    K = len(populations)
+    models = [build_probabilistic_model(pop) for pop in populations]
+    rmp = np.zeros((K, K))
+
+    for i in range(K):
+        for j in range(K):
+            if i == j:
+                rmp[i, j] = 1.0
+            else:
+                d = kl_divergence(models[i], models[j]) + \
+                    kl_divergence(models[j], models[i])
+                rmp[i, j] = math.exp(-d)
+        rmp[i] /= rmp[i].sum() + EPS
+
+    return rmp
+
+
+# ============================================================
+# EVOLUTION CORE (ONE GENERATION)
+# ============================================================
+
+def evolve_one_gen(args):
+    k, gen, pop, pbest, gbest_all, rmp_row, vnr, substrate, T = args
+
+    new_pop, new_pbest = [], []
+
+    K = len(gbest_all)
+    alpha = W_MAX - (W_MAX - W_MIN) * gen
+    total = alpha + BETA + GAMMA
+    a, b, c = alpha / total, BETA / total, GAMMA / total
+
+    for i, ind in enumerate(pop):
+
+        # ---- gBest selection (MT) ----
+        if gen < TRANSFER_START_GEN:
+            gbest = gbest_all[k]
+        else:
+            j = np.random.choice(K, p=rmp_row)
+            gbest = gbest_all[j]
+
+        # ---- PSO ----
+        dp = operation_minus(pbest[i].particle, ind.particle)
+        dg = operation_minus(gbest.particle, ind.particle)
+
+        tmp = operation_plus(a, ind.velocity, b, dp)
+        new_v = operation_plus(1 - c, tmp, c, dg)
+
+        new_p = operation_multiply(
+            ind.particle, new_v, vnr, substrate
+        )
+
+        new_cost = fast_fitness(new_p, substrate, vnr)
+
+        # ---- SA ----
+        if T > 0.1:
+            sa_p = sa_neighbor(new_p, substrate, vnr)
+            sa_cost = fast_fitness(sa_p, substrate, vnr)
+
+            delta = sa_cost - new_cost
+            if delta < 0 or random.random() < math.exp(-delta / T):
+                new_p, new_cost = sa_p, sa_cost
+
+        new_ind = Individual(new_p, new_v, new_cost)
+
+        # ---- pBest ----
+        if new_cost < pbest[i].cost:
+            new_pbest.append(copy.deepcopy(new_ind))
+        else:
+            new_pbest.append(pbest[i])
+
+        new_pop.append(new_ind)
+
+    return k, new_pop, new_pbest
+
+
+# ============================================================
+# SPAC UTILITIES
+# ============================================================
+
+def is_feasible_particle(particle, substrate, vnr):
+    mapping, paths = build_and_reserve(particle, substrate, vnr)
+    return mapping is not None
+
+
+def enhanced_score(k, ind, vnr, substrate):
+    revenue = resource_demand(vnr)
+    cost = ind.cost
+    criticality = len(set(ind.particle))
+
+    w1, w2, w3 = 0.5, 0.3, 0.2
+    return w1 * revenue - w2 * cost - w3 * criticality
+
+
+def rediversify_population(pop, substrate, vnr):
+    n = len(pop)
+    m = max(1, int(0.3 * n))
+
+    new = init_particles_hpso(substrate, vnr, m)
+
+    for i in range(m):
+        p = new[i]
+        vel = [random.randint(0, 1) for _ in p]
+        cost = fast_fitness(p, substrate, vnr)
+        pop[i] = Individual(p, vel, cost)
+
+    return pop
+
+
+# ============================================================
+# MT-HPSO SPAC MAIN ALGORITHM
+# ============================================================
+
+def run_mt_hpso_spac(
+    vnr_list,
+    substrate,
+    pop_size=20,
+    max_gen=100,
+    min_gen=MATURITY_GEN
+):
+    K = len(vnr_list)
+
+    populations, pbests = [], []
+    allocated = [False] * K
+    final_solutions = {}
+
+    for vnr in vnr_list:
+        swarm = init_particles_hpso(substrate, vnr, pop_size)
+        pop = []
+        for p in swarm:
+            vel = [random.randint(0, 1) for _ in p]
+            cost = fast_fitness(p, substrate, vnr)
+            pop.append(Individual(p, vel, cost))
+        populations.append(pop)
+        pbests.append(copy.deepcopy(pop))
+
+    T = T0
+    G_current = copy.deepcopy(substrate)
+
+    for gen in range(1, max_gen + 1):
+
+        if all(allocated):
+            break
+
+        rmp = build_rmp_matrix(populations)
+
+        gbest_all = [
+            min(populations[k], key=lambda x: x.cost)
+            for k in range(K)
+        ]
+
+        tasks = [
+            (k, gen, populations[k], pbests[k],
+             gbest_all, rmp[k], vnr_list[k], G_current, T)
+            for k in range(K) if not allocated[k]
+        ]
+
+        if tasks:
+            with Pool(min(cpu_count(), len(tasks))) as pool:
+                results = pool.map(evolve_one_gen, tasks)
+
+            for k, pop, pbest in results:
+                populations[k] = pop
+                pbests[k] = pbest
+
+        T *= COOLING_RATE
+
+        # ---- MATURITY PERIOD ----
+        if gen < min_gen:
+            continue
+
+        # ---- COLLECT FEASIBLE ----
+        ready = []
+
+        for k in range(K):
+            if allocated[k]:
+                continue
+
+            best = min(populations[k], key=lambda x: x.cost)
+
+            if is_feasible_particle(best.particle, G_current, vnr_list[k]):
+                ready.append((k, best))
+
+        if len(ready) < int(STAGE_RATIO * K) and gen != max_gen:
+            continue
+
+        # ---- RANKING ----
+        ready.sort(
+            key=lambda x: enhanced_score(
+                x[0], x[1], vnr_list[x[0]], G_current
+            ),
+            reverse=True
+        )
+
+        # ---- SEQUENTIAL COMMIT ----
+        for k, ind in ready:
+            if allocated[k]:
+                continue
+
+            mapping, paths = build_and_reserve(
+                ind.particle, substrate, vnr_list[k]
+            )
+
+            if mapping is not None:
+                allocated[k] = True
+                final_solutions[k] = (mapping, paths)
+
+                print(f"[SPAC-ALLOC] Gen={gen}, VNR={k}")
+
+                G_current = copy.deepcopy(substrate)
+
+        # ---- DIVERSIFY REMAINING ----
+        for k in range(K):
+            if not allocated[k]:
+                populations[k] = rediversify_population(
+                    populations[k], G_current, vnr_list[k]
+                )
+
+    return final_solutions
+
+
+# ============================================================
+# PUBLIC API
+# ============================================================
+
+def embed_batch(
+    substrate,
+    batch,
+    pop_size=20,
+    generations=30
+):
+    accepted, rejected = [], []
+    vnr_list = [vnr for vnr, _ in batch]
+
+    solutions = run_mt_hpso_spac(
+        vnr_list, substrate, pop_size, generations
+    )
+
+    for i, (vnr, _) in enumerate(batch):
+        if i in solutions:
+            mapping, paths = solutions[i]
+            accepted.append((vnr, mapping, paths))
+        else:
+            rejected.append(vnr)
+
+    return accepted, rejected

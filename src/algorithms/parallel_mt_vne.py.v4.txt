@@ -1,0 +1,253 @@
+import random
+import copy
+import math
+import numpy as np
+from multiprocessing import Pool, cpu_count
+
+from algorithms.hpso import (
+    operation_minus,
+    operation_plus,
+    operation_multiply,
+    sa_neighbor,
+    init_particles_hpso
+)
+
+from algorithms.proposed import (
+    Individual,
+    compute_fast_fitness,
+    build_full_solution_check,
+    verify_and_allocate,
+    INFEASIBLE_FITNESS
+)
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+MIN_GENS_BEFORE_ALLOCATE = 10
+TRANSFER_START_GEN = 5
+EPS = 1e-9
+
+
+# ============================================================
+# 1. Similarity Learning (Resource-aware MFEA-II)
+# ============================================================
+
+def build_probabilistic_model(pop, substrate):
+    """
+    P(i = virtual node index, s = substrate node)
+    penalize frequently used substrate nodes
+    """
+    model = {}
+    usage = {}
+
+    for ind in pop:
+        for s in ind.particle:
+            usage[s] = usage.get(s, 0) + 1
+
+    for ind in pop:
+        for i, s in enumerate(ind.particle):
+            penalty = math.exp(-usage.get(s, 0) / len(pop))
+            model[(i, s)] = model.get((i, s), 0) + penalty
+
+    total = sum(model.values()) + EPS
+    for k in model:
+        model[k] /= total
+
+    return model
+
+
+def kl_divergence(p, q):
+    keys = set(p.keys()) | set(q.keys())
+    return sum(
+        p.get(k, EPS) * math.log((p.get(k, EPS)) / (q.get(k, EPS)))
+        for k in keys
+    )
+
+
+def build_rmp_matrix(populations, vnr_list, substrate):
+    K = len(populations)
+    models = [
+        build_probabilistic_model(populations[k], substrate)
+        for k in range(K)
+    ]
+
+    rmp = np.zeros((K, K))
+
+    for i in range(K):
+        for j in range(K):
+            if i == j:
+                rmp[i][j] = 1.0
+            else:
+                d = kl_divergence(models[i], models[j]) + \
+                    kl_divergence(models[j], models[i])
+                rmp[i][j] = math.exp(-d)
+
+    # --- adaptive flattening for large VNRs ---
+    for k in range(K):
+        alpha = 1.0 / (1.0 + len(vnr_list[k].nodes))
+        rmp[k] = rmp[k] ** alpha
+        rmp[k] /= rmp[k].sum() + EPS
+
+    return rmp
+
+
+# ============================================================
+# 2. One Generation MT-PSO + SA (Diversity-aware)
+# ============================================================
+
+def evolve_one_gen(args):
+    k, gen, pop, pbest, gbest_all, rmp_row, vnr, substrate = args
+
+    new_pop, new_pbest = [], []
+    K = len(gbest_all)
+
+    for i, ind in enumerate(pop):
+
+        # ---- choose gbest ----
+        if gen < TRANSFER_START_GEN:
+            gbest = gbest_all[k]
+        else:
+            j = np.random.choice(K, p=rmp_row)
+            gbest = gbest_all[j]
+
+        # ---- PSO update ----
+        dp = operation_minus(pbest[i].particle, ind.particle)
+        dg = operation_minus(gbest.particle, ind.particle)
+
+        v = operation_plus(0.5, ind.velocity, 0.3, dp)
+        v = operation_plus(0.8, v, 0.2, dg)
+
+        particle = operation_multiply(ind.particle, v, vnr, substrate)
+        fit = compute_fast_fitness(vnr, particle, substrate)
+
+        # ---- SA refinement ----
+        sa_p = sa_neighbor(particle, substrate, vnr)
+        sa_fit = compute_fast_fitness(vnr, sa_p, substrate)
+        if sa_fit > fit:
+            particle, fit = sa_p, sa_fit
+
+        new_ind = Individual(particle, v, fit)
+
+        if fit > pbest[i].fitness:
+            new_pbest.append(copy.deepcopy(new_ind))
+        else:
+            new_pbest.append(pbest[i])
+
+        new_pop.append(new_ind)
+
+    return k, new_pop, new_pbest
+
+
+# ============================================================
+# 3. Parallel MT-VNE with Immediate Allocation
+# ============================================================
+
+def run_parallel_mt_vne(vnr_list, substrate,
+                        pop_size=20, max_gen=100):
+
+    K = len(vnr_list)
+
+    populations, pbests = [], []
+    allocated = [False] * K
+    final_solutions = {}
+
+    # ---- Initialization ----
+    for vnr in vnr_list:
+        parts = init_particles_hpso(substrate, vnr, pop_size)
+        pop = []
+        for p in parts:
+            vel = [random.randint(0, 1) for _ in p]
+            fit = compute_fast_fitness(vnr, p, substrate)
+            pop.append(Individual(p, vel, fit))
+        populations.append(pop)
+        pbests.append(copy.deepcopy(pop))
+
+    # ---- Evolution ----
+    for gen in range(1, max_gen + 1):
+
+        if all(allocated):
+            break
+
+        # --- Similarity learning ---
+        rmp = build_rmp_matrix(populations, vnr_list, substrate)
+
+        for k in range(K):
+            if allocated[k]:
+                rmp[k, :] = 0
+                rmp[:, k] = 0
+                rmp[k, k] = 1
+
+        gbest_all = [
+            max(populations[k], key=lambda x: x.fitness)
+            for k in range(K)
+        ]
+
+        # --- Parallel PSO ---
+        tasks = [
+            (k, gen, populations[k], pbests[k],
+             gbest_all, rmp[k], vnr_list[k], substrate)
+            for k in range(K) if not allocated[k]
+        ]
+
+        if tasks:
+            with Pool(min(cpu_count(), len(tasks))) as pool:
+                results = pool.map(evolve_one_gen, tasks)
+
+            for k, pop, pbest in results:
+                populations[k] = pop
+                pbests[k] = pbest
+
+        # --- Immediate Allocation ---
+        if gen < MIN_GENS_BEFORE_ALLOCATE:
+            continue
+
+        order = sorted(
+            range(K),
+            key=lambda i: vnr_list[i].revenue,
+            reverse=True
+        )
+
+        for k in order:
+            if allocated[k]:
+                continue
+
+            best = max(populations[k], key=lambda x: x.fitness)
+            if best.fitness <= INFEASIBLE_FITNESS:
+                continue
+
+            sol = build_full_solution_check(
+                vnr_list[k], best.particle, substrate
+            )
+
+            if sol and verify_and_allocate(substrate, sol):
+                allocated[k] = True
+                final_solutions[k] = sol
+                print(f"[ALLOCATED] Gen={gen}, VNR={k}")
+
+    return final_solutions
+
+
+# ============================================================
+# 4. PUBLIC API
+# ============================================================
+
+def embed_batch(substrate, batch,
+                pop_size=20, generations=100):
+
+    accepted, rejected = [], []
+
+    vnr_list = [vnr for vnr, _ in batch]
+
+    solutions = run_parallel_mt_vne(
+        vnr_list, substrate, pop_size, generations
+    )
+
+    for i, (vnr, _) in enumerate(batch):
+        if i in solutions:
+            sol = solutions[i]
+            accepted.append((sol.vnr, sol.mapping, sol.link_paths))
+        else:
+            rejected.append(vnr)
+
+    return accepted, rejected

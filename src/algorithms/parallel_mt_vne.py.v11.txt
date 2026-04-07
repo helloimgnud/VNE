@@ -1,0 +1,381 @@
+import random
+import copy
+import math
+import numpy as np
+from multiprocessing import Pool, cpu_count
+
+# ============================================================
+# FAST HPSO CORE (GIỮ NGUYÊN API CŨ)
+# ============================================================
+from algorithms.fast_hpso import (
+    fast_fitness,
+    build_and_reserve,
+    init_particles_hpso,
+    operation_minus,
+    operation_plus,
+    operation_multiply,
+    sa_neighbor,
+    INFEASIBLE_PENALTY
+)
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+EPS = 1e-9
+
+W_MAX = 0.9
+W_MIN = 0.4
+BETA = 0.3
+GAMMA = 0.3
+
+T0 = 100
+COOLING_RATE = 0.95
+
+TRANSFER_START_GEN = 3
+
+
+# ============================================================
+# Individual
+# ============================================================
+
+class Individual:
+    def __init__(self, particle, velocity, cost):
+        self.particle = particle
+        self.velocity = velocity
+        self.cost = cost
+
+
+# ============================================================
+# RESOURCE-AWARE FEATURE EXTRACTION
+# ============================================================
+
+def vnode_features(vnr, v):
+    cpu = vnr.nodes[v]["cpu"]
+    degree = vnr.degree(v)
+    total_bw = sum(vnr.edges[e]["bw"] for e in vnr.edges(v))
+    return cpu, degree, total_bw
+
+
+def feature_bucket(feat):
+    cpu, degree, bw = feat
+
+    return (
+        round(cpu / 20),
+        round(degree),
+        round(bw / 50)
+    )
+
+
+# ============================================================
+# TRANSFER KNOWLEDGE MODEL
+# ============================================================
+
+class TransferModel:
+    def __init__(self):
+        self.knowledge = {}
+
+    def update_from_solution(self, vnr, particle):
+        for i, v in enumerate(vnr.nodes()):
+            feat = vnode_features(vnr, v)
+            bucket = feature_bucket(feat)
+            s = particle[i]
+
+            if bucket not in self.knowledge:
+                self.knowledge[bucket] = {}
+
+            self.knowledge[bucket][s] = \
+                self.knowledge[bucket].get(s, 0) + 1
+
+    def recommend(self, vnr, v, substrate):
+        feat = vnode_features(vnr, v)
+        bucket = feature_bucket(feat)
+
+        cpu_need = feat[0]
+
+        candidates = [
+            s for s in substrate.nodes()
+            if substrate.nodes[s]["cpu"] >= cpu_need
+        ]
+
+        if not candidates:
+            return None
+
+        if bucket in self.knowledge:
+            scores = self.knowledge[bucket]
+
+            candidates.sort(
+                key=lambda s: scores.get(s, 0),
+                reverse=True
+            )
+
+        return candidates[0]
+
+
+# ============================================================
+# GUIDED PARTICLE INITIALIZATION
+# ============================================================
+
+def init_particle_guided(vnr, substrate, model):
+    particle = []
+
+    for v in vnr.nodes():
+        s = model.recommend(vnr, v, substrate)
+
+        if s is None:
+            feasible = [
+                x for x in substrate.nodes()
+                if substrate.nodes[x]["cpu"] >= vnr.nodes[v]["cpu"]
+            ]
+
+            if feasible:
+                s = random.choice(feasible)
+            else:
+                s = random.choice(list(substrate.nodes()))
+
+        particle.append(s)
+
+    return particle
+
+
+def init_swarm_with_transfer(vnr, substrate, pop_size, model):
+    swarm = []
+
+    for _ in range(pop_size):
+        p = init_particle_guided(vnr, substrate, model)
+        swarm.append(p)
+
+    return swarm
+
+
+# ============================================================
+# TRANSFER-AWARE MULTIPLY (REPLACEMENT WRAPPER)
+# ============================================================
+
+def transfer_aware_multiply(Xi, V, vnr, substrate, model):
+    """
+    Bọc operation_multiply gốc nhưng thay random bằng recommend
+    khi V[i] == 0
+    """
+    Xnew = Xi.copy()
+    vnodes = list(vnr.nodes())
+
+    for i in range(len(V)):
+        if V[i] == 0:
+            v = vnodes[i]
+
+            s = model.recommend(vnr, v, substrate)
+
+            if s is not None:
+                Xnew[i] = s
+            else:
+                # fallback về logic gốc
+                v_cpu = vnr.nodes[v]['cpu']
+                candidates = [
+                    s for s in substrate.nodes()
+                    if substrate.nodes[s]['cpu'] >= v_cpu
+                ]
+                if candidates:
+                    Xnew[i] = random.choice(candidates)
+
+    return Xnew
+
+
+# ============================================================
+# GUIDED MUTATION USING TRANSFER
+# ============================================================
+
+def guided_mutation(particle, vnr, substrate, model):
+    new_p = particle.copy()
+
+    i = random.randrange(len(particle))
+    v = list(vnr.nodes())[i]
+
+    s = model.recommend(vnr, v, substrate)
+
+    if s is not None:
+        new_p[i] = s
+
+    return new_p
+
+
+# ============================================================
+# ONE GENERATION EVOLUTION
+# ============================================================
+
+def evolve_one_gen(args):
+    k, gen, pop, pbest, gbest, vnr, substrate, T, model = args
+
+    new_pop, new_pbest = [], []
+
+    alpha = W_MAX - (W_MAX - W_MIN) * gen
+    total = alpha + BETA + GAMMA
+    a, b, c = alpha / total, BETA / total, GAMMA / total
+
+    for i, ind in enumerate(pop):
+
+        # ====================================================
+        # CHUẨN 100% THEO ĐỊNH NGHĨA PHÉP TOÁN CỦA EM
+        # ====================================================
+
+        dp = operation_minus(pbest[i].particle, ind.particle)
+        dg = operation_minus(gbest.particle, ind.particle)
+
+        tmp = operation_plus(a, ind.velocity, b, dp)
+        new_v = operation_plus(1 - c, tmp, c, dg)
+
+        # Thay multiply gốc bằng phiên bản có transfer
+        new_p = transfer_aware_multiply(
+            ind.particle, new_v, vnr, substrate, model
+        )
+
+        # ====================================================
+        # MUTATION RESOURCE-AWARE
+        # ====================================================
+        if random.random() < 0.3:
+            new_p = guided_mutation(new_p, vnr, substrate, model)
+
+        new_cost = fast_fitness(new_p, substrate, vnr)
+
+        # ====================================================
+        # SIMULATED ANNEALING
+        # ====================================================
+        if T > 0.1:
+            sa_p = sa_neighbor(new_p, substrate, vnr)
+            sa_cost = fast_fitness(sa_p, substrate, vnr)
+
+            delta = sa_cost - new_cost
+            if delta < 0 or random.random() < math.exp(-delta / T):
+                new_p, new_cost = sa_p, sa_cost
+
+        new_ind = Individual(new_p, new_v, new_cost)
+
+        if new_cost < pbest[i].cost:
+            new_pbest.append(copy.deepcopy(new_ind))
+        else:
+            new_pbest.append(pbest[i])
+
+        new_pop.append(new_ind)
+
+    return k, new_pop, new_pbest
+
+
+# ============================================================
+# MT-HPSO WITH REAL TRANSFER LEARNING
+# ============================================================
+
+def run_mt_hpso(
+    vnr_list,
+    substrate,
+    pop_size=20,
+    max_gen=50
+):
+    K = len(vnr_list)
+
+    populations, pbests = [], []
+    allocated = [False] * K
+    final_solutions = {}
+
+    model = TransferModel()
+
+    # ---- INIT SWARMS WITH TRANSFER ----
+    for vnr in vnr_list:
+        swarm = init_swarm_with_transfer(
+            vnr, substrate, pop_size, model
+        )
+
+        pop = []
+        for p in swarm:
+            vel = [random.randint(0, 1) for _ in p]
+            cost = fast_fitness(p, substrate, vnr)
+            pop.append(Individual(p, vel, cost))
+
+        populations.append(pop)
+        pbests.append(copy.deepcopy(pop))
+
+    T = T0
+
+    # ========================================================
+    # MAIN LOOP
+    # ========================================================
+    for gen in range(max_gen):
+
+        if all(allocated):
+            break
+
+        gbest_all = [
+            min(populations[k], key=lambda x: x.cost)
+            for k in range(K)
+        ]
+
+        tasks = [
+            (k, gen, populations[k], pbests[k],
+             gbest_all[k], vnr_list[k], substrate, T, model)
+            for k in range(K) if not allocated[k]
+        ]
+
+        if tasks:
+            with Pool(min(cpu_count(), len(tasks))) as pool:
+                results = pool.map(evolve_one_gen, tasks)
+
+            for k, pop, pbest in results:
+                populations[k] = pop
+                pbests[k] = pbest
+
+        # ====================================================
+        # OPPORTUNISTIC COMMIT
+        # ====================================================
+
+        for k in range(K):
+            if allocated[k]:
+                continue
+
+            best = min(populations[k], key=lambda x: x.cost)
+
+            if best.cost >= INFEASIBLE_PENALTY:
+                continue
+
+            mapping, paths = build_and_reserve(
+                best.particle, substrate, vnr_list[k]
+            )
+
+            if mapping is not None:
+                allocated[k] = True
+                final_solutions[k] = (mapping, paths)
+
+                model.update_from_solution(
+                    vnr_list[k], best.particle
+                )
+
+                print(f"[TRANSFER-ALLOC] Gen={gen}, VNR={k}")
+
+        T *= COOLING_RATE
+
+    return final_solutions
+
+
+# ============================================================
+# PUBLIC API
+# ============================================================
+
+def embed_batch(
+    substrate,
+    batch,
+    pop_size=20,
+    generations=30
+):
+    accepted, rejected = [], []
+    vnr_list = [vnr for vnr, _ in batch]
+
+    solutions = run_mt_hpso(
+        vnr_list, substrate, pop_size, generations
+    )
+
+    for i, (vnr, _) in enumerate(batch):
+        if i in solutions:
+            mapping, paths = solutions[i]
+            accepted.append((vnr, mapping, paths))
+        else:
+            rejected.append(vnr)
+
+    return accepted, rejected

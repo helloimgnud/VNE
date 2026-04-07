@@ -1,0 +1,817 @@
+# proposed
+from evaluation.eval import revenue_of_vnr
+import random
+import copy
+from multiprocessing import Pool, cpu_count
+import networkx as nx
+from algorithms.fast_hpso import (
+    operation_minus,
+    operation_plus,
+    operation_multiply,
+    fast_fitness,
+    sa_neighbor,
+    init_particles_hpso
+)
+
+from algorithms.proposed import (
+    Individual,
+
+    build_full_solution_check,
+    verify_and_allocate,
+    INFEASIBLE_FITNESS
+)
+
+from utils.graph_utils import (
+    can_place_node,
+    reserve_node,
+    reserve_path
+)
+
+# ============================================================
+# 1. EVOLVE ONE VNR (FULL PSO – NO RESERVATION)
+# ============================================================
+
+def evolve_vnr_full(args):
+    """
+    Chạy PSO hoàn chỉnh cho 1 VNR
+    Trả về top-K best Individuals
+    """
+    vnr, substrate, pop_size, generations, top_k = args
+
+    # ---- Init ----
+    particles = init_particles_hpso(substrate, vnr, pop_size)
+    population = []
+
+    for p in particles:
+        vel = [random.randint(0, 1) for _ in p]
+        fit = fast_fitness(p, substrate, vnr)
+        population.append(Individual(p, vel, fit))
+
+    pbests = copy.deepcopy(population)
+
+    # ---- PSO Loop ----
+    for _ in range(generations):
+        if not population:
+            break
+
+        gbest = max(population, key=lambda x: x.fitness)
+
+        new_pop = []
+        new_pbest = []
+
+        for i, ind in enumerate(population):
+            dp = operation_minus(pbests[i].particle, ind.particle)
+            dg = operation_minus(gbest.particle, ind.particle)
+
+            v = operation_plus(0.5, ind.velocity, 0.3, dp)
+            v = operation_plus(0.8, v, 0.2, dg)
+
+            new_particle = operation_multiply(
+                ind.particle, v, vnr, substrate
+            )
+
+            fit = fast_fitness(new_particle, substrate, vnr)
+
+            # SA refinement
+            sa_p = sa_neighbor(new_particle, substrate, vnr)
+            sa_fit = fast_fitness(sa_p, substrate, vnr)
+
+            if sa_fit > fit:
+                new_particle = sa_p
+                fit = sa_fit
+
+            new_ind = Individual(new_particle, v, fit)
+
+            if fit > pbests[i].fitness:
+                new_pbest.append(copy.deepcopy(new_ind))
+            else:
+                new_pbest.append(pbests[i])
+
+            new_pop.append(new_ind)
+
+        population = new_pop
+        pbests = new_pbest
+
+    # ---- Select TOP-K ----
+    feasible = [p for p in population if p.fitness > INFEASIBLE_FITNESS]
+    feasible.sort(key=lambda x: x.fitness, reverse=True)
+
+    return feasible[:top_k]
+
+
+# ============================================================
+# 2. PARALLEL PSO FOR ALL VNRS
+# ============================================================
+
+def solve_all_vnrs_parallel(vnr_list, substrate, pop_size, generations, top_k):
+    tasks = [
+        (vnr, substrate, pop_size, generations, top_k)
+        for vnr in vnr_list
+    ]
+
+    n_proc = min(cpu_count(), len(tasks))
+    with Pool(processes=n_proc) as pool:
+        results = pool.map(evolve_vnr_full, tasks)
+
+    # results[k] = list of top-k Individuals of vnr k
+    return results
+
+
+# ============================================================
+# 3. RESERVATION (TOP-K TRY)
+# ============================================================
+
+def reserve_with_topk(
+    substrate,
+    vnr_list,
+    revenues,
+    candidates_per_vnr
+):
+    substrate_reserved = copy.deepcopy(substrate)
+
+    accepted = {}
+    rejected = set()
+
+    # ---- Heuristic score per VNR ----
+    scores = []
+    for i, cands in enumerate(candidates_per_vnr):
+        if not cands:
+            continue
+        best = cands[0]
+        cost = -best.fitness  # fitness cao = cost thấp
+        score = cost / (revenues[i] + 1e-6)
+        scores.append((score, i))
+
+    scores.sort()  # cost/revenue nhỏ trước
+
+    # ---- Reservation loop ----
+    for _, k in scores:
+        vnr = vnr_list[k]
+        placed = False
+
+        for ind in candidates_per_vnr[k]:
+            sol = build_full_solution_check(
+                vnr, ind.particle, substrate_reserved
+            )
+            if sol is None:
+                continue
+
+            feasible = True
+
+            # Node check
+            for v_node, s_node in sol.mapping.items():
+                cpu = vnr.nodes[v_node]['cpu']
+                if not can_place_node(substrate_reserved, s_node, cpu):
+                    feasible = False
+                    break
+
+            if not feasible:
+                continue
+
+            # Link check
+            for (u, v), path in sol.link_paths.items():
+                bw = vnr.edges[u, v]['bw']
+                for i in range(len(path) - 1):
+                    if substrate_reserved[path[i]][path[i+1]]['bw'] < bw:
+                        feasible = False
+                        break
+                if not feasible:
+                    break
+
+            if not feasible:
+                continue
+
+            # ---- Reserve ----
+            for v_node, s_node in sol.mapping.items():
+                reserve_node(substrate_reserved, s_node, vnr.nodes[v_node]['cpu'])
+
+            for (u, v), path in sol.link_paths.items():
+                reserve_path(substrate_reserved, path, vnr.edges[u, v]['bw'])
+
+            accepted[k] = sol
+            placed = True
+            break
+
+        if not placed:
+            rejected.add(k)
+
+
+    return accepted, rejected
+
+
+# ============================================================
+# 4. INFEASIBILITY DETECTION HELPERS
+# ============================================================
+
+def detect_infeasible_nodes(mapping, substrate, vnr):
+    """
+    Detect nodes in mapping that don't have enough CPU capacity.
+    
+    Args:
+        mapping: dict {vnode: snode}
+        substrate: substrate network
+        vnr: virtual network request
+    
+    Returns:
+        infeasible_nodes: list of vnodes that are mapped to insufficient substrate nodes
+    """
+    infeasible = []
+    
+    for vnode, snode in mapping.items():
+        required_cpu = vnr.nodes[vnode]['cpu']
+        available_cpu = substrate.nodes[snode]['cpu']
+        
+        if available_cpu < required_cpu:
+            infeasible.append(vnode)
+    
+    return infeasible
+
+
+def detect_infeasible_links(mapping, substrate, vnr, link_paths):
+    """
+    Detect links that cannot be satisfied due to insufficient bandwidth.
+    
+    Args:
+        mapping: dict {vnode: snode}
+        substrate: substrate network
+        vnr: virtual network request
+        link_paths: dict {(u,v): path} - paths for virtual links
+    
+    Returns:
+        infeasible_links: list of (u, v) tuples - virtual edges that fail
+        reasons: dict {(u,v): reason_string} - why each link failed
+    """
+    infeasible = []
+    reasons = {}
+    
+    for (u, v) in vnr.edges():
+        required_bw = vnr.edges[u, v]['bw']
+        
+        # Check if path exists
+        if (u, v) not in link_paths:
+            infeasible.append((u, v))
+            reasons[(u, v)] = "No path found"
+            continue
+        
+        path = link_paths[(u, v)]
+        
+        # Check if path is valid
+        if path is None or len(path) < 2:
+            infeasible.append((u, v))
+            reasons[(u, v)] = "Invalid path"
+            continue
+        
+        # Check if path starts/ends at correct nodes
+        if path[0] != mapping[u] or path[-1] != mapping[v]:
+            infeasible.append((u, v))
+            reasons[(u, v)] = f"Path mismatch: expected {mapping[u]}->{mapping[v]}, got {path[0]}->{path[-1]}"
+            continue
+        
+        # Check bandwidth on each edge
+        for i in range(len(path) - 1):
+            edge_bw = substrate[path[i]][path[i+1]].get('bw', 0)
+            if edge_bw < required_bw:
+                infeasible.append((u, v))
+                reasons[(u, v)] = f"Insufficient BW on edge ({path[i]},{path[i+1]}): {edge_bw} < {required_bw}"
+                break
+    
+    return infeasible, reasons
+
+
+# ============================================================
+# 5. NODE REPAIR HELPERS
+# ============================================================
+
+def find_feasible_nodes_same_domain(substrate, vnode, vnr, current_mapping):
+    """
+    Find all substrate nodes in the same domain that can host vnode.
+    
+    Args:
+        substrate: substrate network
+        vnode: virtual node to place
+        vnr: virtual network request
+        current_mapping: current node mapping (to avoid conflicts)
+    
+    Returns:
+        feasible_snodes: list of substrate node IDs that can host vnode
+    """
+    required_cpu = vnr.nodes[vnode]['cpu']
+    domain = vnr.nodes[vnode].get('domain', None)
+    
+    feasible = []
+    used_snodes = set(current_mapping.values())
+    
+    for snode in substrate.nodes():
+        # Skip if already used
+        if snode in used_snodes:
+            continue
+        
+        # Check domain match
+        if domain is not None:
+            snode_domain = substrate.nodes[snode].get('domain', None)
+            if snode_domain != domain:
+                continue
+        
+        # Check CPU capacity
+        available_cpu = substrate.nodes[snode]['cpu']
+        if available_cpu >= required_cpu:
+            feasible.append(snode)
+    
+    return feasible
+
+
+def repair_node_mapping(mapping, substrate, vnr, infeasible_nodes, verbose=True):
+    """
+    Try to repair node mapping by remapping infeasible nodes to other feasible nodes.
+    
+    Args:
+        mapping: dict {vnode: snode} - original mapping
+        substrate: substrate network
+        vnr: virtual network request
+        infeasible_nodes: list of vnodes that need repair
+        verbose: bool - whether to print detailed logs
+    
+    Returns:
+        new_mapping: dict or None - repaired mapping, or None if repair failed
+        changed_nodes: list of vnodes that were remapped
+    """
+    new_mapping = copy.deepcopy(mapping)
+    changed_nodes = []
+    
+    for vnode in infeasible_nodes:
+        # Find feasible alternatives
+        feasible_snodes = find_feasible_nodes_same_domain(substrate, vnode, vnr, new_mapping)
+        
+        if not feasible_snodes:
+            # Cannot repair this node
+            return None, []
+        
+        # Choose the one with most available CPU
+        best_snode = max(feasible_snodes, key=lambda s: substrate.nodes[s]['cpu'])
+        
+        # Update mapping
+        old_snode = new_mapping[vnode]
+        new_mapping[vnode] = best_snode
+        changed_nodes.append(vnode)
+    
+    return new_mapping, changed_nodes
+
+
+# ============================================================
+# 6. LINK REPAIR HELPERS
+# ============================================================
+
+def rebuild_all_paths(mapping, substrate, vnr):
+    """
+    Rebuild all paths for all virtual links using shortest path.
+    
+    Args:
+        mapping: dict {vnode: snode}
+        substrate: substrate network
+        vnr: virtual network request
+    
+    Returns:
+        link_paths: dict {(u,v): path} or None if any path cannot be found
+    """
+    import networkx as nx
+    
+    link_paths = {}
+    
+    for (u, v) in vnr.edges():
+        src = mapping[u]
+        dst = mapping[v]
+        
+        try:
+            path = nx.shortest_path(substrate, src, dst)
+            link_paths[(u, v)] = path
+        except nx.NetworkXNoPath:
+            return None
+    
+    return link_paths
+
+
+def check_path_capacity(path, substrate, bw):
+    """Check if path has sufficient bandwidth on all edges."""
+    if path is None or len(path) < 2:
+        return False
+    
+    for i in range(len(path) - 1):
+        u, v = path[i], path[i + 1]
+        if substrate[u][v].get('bw', 0) < bw:
+            return False
+    return True
+
+
+def repair_link_paths(mapping, substrate, vnr, infeasible_links, verbose=True, max_attempts=10):
+    """
+    Try to repair link paths by finding alternative routes for infeasible links.
+    
+    Strategy:
+    1. For each infeasible link, create a filtered substrate graph
+    2. Remove all edges with insufficient bandwidth
+    3. Find shortest path on the filtered graph
+    
+    Args:
+        mapping: dict {vnode: snode}
+        substrate: substrate network
+        vnr: virtual network request
+        infeasible_links: list of (u, v) tuples - links that need repair
+        verbose: bool - whether to print detailed logs
+        max_attempts: (deprecated, kept for API compatibility)
+    
+    Returns:
+        new_link_paths: dict {(u,v): path} or None if repair failed
+    """
+    import networkx as nx
+    
+    new_link_paths = {}
+    
+    # First, add all feasible links (those not in infeasible_links)
+    for (u, v) in vnr.edges():
+        if (u, v) in infeasible_links:
+            continue
+        
+        src = mapping[u]
+        dst = mapping[v]
+        bw = vnr.edges[u, v]['bw']
+        
+        try:
+            path = nx.shortest_path(substrate, src, dst)
+            if check_path_capacity(path, substrate, bw):
+                new_link_paths[(u, v)] = path
+            else:
+                # Shouldn't happen, but handle it
+                return None
+        except nx.NetworkXNoPath:
+            return None
+    
+    # Now repair infeasible links using bandwidth-filtered graph
+    for (u, v) in infeasible_links:
+        src = mapping[u]
+        dst = mapping[v]
+        bw = vnr.edges[u, v]['bw']
+        
+        # Create a filtered substrate graph with only edges that have sufficient bandwidth
+        filtered_substrate = nx.DiGraph() if substrate.is_directed() else nx.Graph()
+        
+        # Add all nodes
+        filtered_substrate.add_nodes_from(substrate.nodes(data=True))
+        
+        # Add only edges with sufficient bandwidth
+        for (s_u, s_v, data) in substrate.edges(data=True):
+            edge_bw = data.get('bw', 0)
+            if edge_bw >= bw:
+                filtered_substrate.add_edge(s_u, s_v, **data)
+        
+        # Try to find shortest path on filtered graph
+        found = False
+        try:
+            path = nx.shortest_path(filtered_substrate, src, dst)
+            
+            # Double-check the path has sufficient bandwidth (should always be true)
+            if check_path_capacity(path, substrate, bw):
+                new_link_paths[(u, v)] = path
+                found = True
+            else:
+                # This should never happen after filtering
+                if verbose:
+                    print(f"    WARNING: Path found on filtered graph but failed capacity check!")
+        except nx.NetworkXNoPath:
+            # No path exists with sufficient bandwidth
+            pass
+        
+        if not found:
+            return None  # Cannot repair this link
+    
+    return new_link_paths
+
+
+# ============================================================
+# 7. TWO-STAGE REPAIR
+# ============================================================
+
+def two_stage_repair(vnr, gbest_particle, substrate, vnr_idx, verbose=True):
+    """
+    Two-stage repair process:
+    Stage 1: Repair infeasible node mappings
+    Stage 2: Repair infeasible link paths
+    
+    Args:
+        vnr: virtual network request
+        gbest_particle: list - best particle (node mapping) from PSO
+        substrate: substrate network
+        vnr_idx: index of VNR for logging
+        verbose: bool - whether to print detailed logs
+    
+    Returns:
+        mapping: dict {vnode: snode} or None
+        link_paths: dict {(u,v): path} or None
+        success: bool
+    """
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"[TWO-STAGE REPAIR] Starting repair for VNR {vnr_idx}")
+        print(f"{'='*60}")
+    
+    # Build initial mapping from gbest particle
+    vnodes = list(vnr.nodes())
+    mapping = {}
+    
+    if verbose:
+        print(f"\n[STAGE 0: INITIAL MAPPING]")
+    for i, vnode in enumerate(vnodes):
+        snode = gbest_particle[i]
+        mapping[vnode] = snode
+        if verbose:
+            required_cpu = vnr.nodes[vnode]['cpu']
+            available_cpu = substrate.nodes[snode]['cpu']
+            status = "YES" if available_cpu >= required_cpu else "NO"
+            print(f"  {status} vnode {vnode} -> snode {snode} (require {required_cpu} CPU, available {available_cpu} CPU)")
+    
+    # ============================================================
+    # STAGE 1: NODE REPAIR
+    # ============================================================
+    if verbose:
+        print(f"\n[STAGE 1: NODE REPAIR]")
+    
+    infeasible_nodes = detect_infeasible_nodes(mapping, substrate, vnr)
+    
+    if infeasible_nodes:
+        if verbose:
+            print(f"  Found {len(infeasible_nodes)} infeasible nodes: {infeasible_nodes}")
+            
+            for vnode in infeasible_nodes:
+                required_cpu = vnr.nodes[vnode]['cpu']
+                old_snode = mapping[vnode]
+                available_cpu = substrate.nodes[old_snode]['cpu']
+                print(f"     vnode {vnode}: mapped to snode {old_snode} (need {required_cpu}, has {available_cpu})")
+        
+        # Try to repair
+        new_mapping, changed_nodes = repair_node_mapping(mapping, substrate, vnr, infeasible_nodes, verbose)
+        
+        if new_mapping is None:
+            if verbose:
+                print(f"   Node repair FAILED: Cannot find feasible alternatives")
+            return None, None, False
+        
+        if verbose:
+            print(f"   Node repair SUCCESS: Remapped {len(changed_nodes)} nodes")
+            for vnode in changed_nodes:
+                old_snode = mapping[vnode]
+                new_snode = new_mapping[vnode]
+                required_cpu = vnr.nodes[vnode]['cpu']
+                new_available_cpu = substrate.nodes[new_snode]['cpu']
+                print(f"     vnode {vnode}: {old_snode} -> {new_snode} (need {required_cpu}, now has {new_available_cpu})")
+        
+        mapping = new_mapping
+        
+        # Need to rebuild all paths since nodes changed
+        if verbose:
+            print(f"  Rebuilding all paths due to node remapping...")
+        link_paths = rebuild_all_paths(mapping, substrate, vnr)
+        
+        if link_paths is None:
+            if verbose:
+                print(f"   Path rebuilding FAILED: No path exists for some links")
+            return None, None, False
+        
+        if verbose:
+            print(f"   All paths rebuilt successfully")
+    else:
+        if verbose:
+            print(f"   All nodes are feasible, no repair needed")
+        
+        # Build initial paths
+        link_paths = rebuild_all_paths(mapping, substrate, vnr)
+        
+        if link_paths is None:
+            if verbose:
+                print(f"   Initial path building FAILED")
+            return None, None, False
+    
+    # ============================================================
+    # STAGE 2: LINK REPAIR
+    # ============================================================
+    if verbose:
+        print(f"\n[STAGE 2: LINK REPAIR]")
+    
+    infeasible_links, reasons = detect_infeasible_links(mapping, substrate, vnr, link_paths)
+    
+    if infeasible_links:
+        if verbose:
+            print(f"  Found {len(infeasible_links)} infeasible links:")
+            
+            for link in infeasible_links:
+                u, v = link
+                reason = reasons.get(link, "Unknown")
+                required_bw = vnr.edges[u, v]['bw']
+                path = link_paths.get(link, None)
+                src = mapping[u]
+                dst = mapping[v]
+                print(f"     link {link} ({src}->{dst}, need {required_bw} BW)")
+                print(f"      Reason: {reason}")
+                if path:
+                    print(f"      Old path: {' -> '.join(map(str, path))}")
+            
+            print(f"  Attempting link repair with bandwidth-filtered shortest paths...")
+        
+        # Try to repair
+        new_link_paths = repair_link_paths(mapping, substrate, vnr, infeasible_links, verbose)
+        
+        if new_link_paths is None:
+            if verbose:
+                print(f"   Link repair FAILED: Cannot find feasible paths even after bandwidth filtering")
+            return None, None, False
+        
+        if verbose:
+            print(f"   Link repair SUCCESS: Found alternative paths for all infeasible links")
+            for link in infeasible_links:
+                u, v = link
+                old_path = link_paths.get(link, [])
+                new_path = new_link_paths[link]
+                required_bw = vnr.edges[u, v]['bw']
+                print(f"     link {link} (need {required_bw} BW)")
+                if old_path:
+                    print(f"      Old path: {' -> '.join(map(str, old_path))}")
+                print(f"      New path: {' -> '.join(map(str, new_path))}")
+                
+                # Verify new path has enough bandwidth
+                min_bw = min(substrate[new_path[i]][new_path[i+1]]['bw'] 
+                            for i in range(len(new_path) - 1))
+                print(f"      Path length: {len(new_path)-1} hops, Min BW: {min_bw}")
+        
+        link_paths = new_link_paths
+    else:
+        if verbose:
+            print(f"   All links are feasible, no repair needed")
+    
+    # ============================================================
+    # FINAL VERIFICATION
+    # ============================================================
+    if verbose:
+        print(f"\n[FINAL VERIFICATION]")
+    
+    # Check nodes one more time
+    infeasible_nodes_final = detect_infeasible_nodes(mapping, substrate, vnr)
+    if infeasible_nodes_final:
+        if verbose:
+            print(f"   FAILED: Still have {len(infeasible_nodes_final)} infeasible nodes!")
+        return None, None, False
+    
+    # Check links one more time
+    infeasible_links_final, reasons_final = detect_infeasible_links(mapping, substrate, vnr, link_paths)
+    if infeasible_links_final:
+        if verbose:
+            print(f"   FAILED: Still have {len(infeasible_links_final)} infeasible links!")
+            for link in infeasible_links_final:
+                print(f"     link {link}: {reasons_final[link]}")
+        return None, None, False
+    
+    if verbose:
+        print(f"   SUCCESS: All nodes and links are feasible!")
+        print(f"{'='*60}\n")
+    
+    return mapping, link_paths, True
+
+
+# ============================================================
+# 8. PUBLIC API
+# ============================================================
+
+def embed_batch(substrate, batch, pop_size=20, generations=30, top_k=5, verbose=False):
+    """
+    Embed a batch of VNRs using parallel PSO with two-stage repair.
+    
+    Args:
+        substrate: substrate network
+        batch: list of (vnr, arrival_time) tuples
+        pop_size: population size for PSO
+        generations: number of PSO generations
+        top_k: number of top candidates to keep per VNR
+        verbose: bool - whether to print detailed logs (default: True)
+    
+    Returns:
+        accepted: list of (vnr, mapping, link_paths) tuples for accepted VNRs
+        rejected: list of rejected VNRs
+    """
+    accepted, rejected = [], []
+
+    vnr_list = [vnr for vnr, _ in batch]
+    revenues = [revenue_of_vnr(vnr) for vnr in vnr_list]
+
+    candidates = solve_all_vnrs_parallel(
+        vnr_list, substrate, pop_size, generations, top_k
+    )
+
+    locked, rejected_idx = reserve_with_topk(
+        substrate, vnr_list, revenues, candidates
+    )
+
+    for i in range(len(vnr_list)):
+        if i in locked:
+            sol = locked[i]
+            if verify_and_allocate(substrate, sol):
+                accepted.append((sol.vnr, sol.mapping, sol.link_paths))
+            else:
+                rejected.append(vnr_list[i])
+        else:
+            rejected.append(vnr_list[i])
+
+    if(len(rejected) == 0):
+        return accepted, rejected
+
+    # ============================================================
+    # TWO-STAGE REPAIR FOR REJECTED VNRS
+    # ============================================================
+    if verbose:
+        print(f"\n{'#'*60}")
+        print(f"# TWO-STAGE REPAIR PHASE")
+        print(f"# Processing {len(rejected)} rejected VNRs...")
+        print(f"{'#'*60}")
+    
+    repair_accepted = []
+    final_rejected = []
+    
+    for vnr_idx, vnr in enumerate(rejected):
+        # Get the original index in vnr_list
+        original_idx = vnr_list.index(vnr)
+        
+        # Get gbest candidate for this VNR
+        if original_idx >= len(candidates) or not candidates[original_idx]:
+            if verbose:
+                print(f"\n[VNR {original_idx}] No candidates available, skipping repair")
+            final_rejected.append(vnr)
+            continue
+        
+        gbest = candidates[original_idx][0]  # Top candidate
+        
+        # Try two-stage repair
+        mapping, link_paths, success = two_stage_repair(
+            vnr, gbest.particle, substrate, original_idx, verbose
+        )
+        
+        if not success:
+            if verbose:
+                print(f"[VNR {original_idx}] Two-stage repair FAILED")
+            final_rejected.append(vnr)
+            continue
+        
+        # Try to reserve resources
+        if verbose:
+            print(f"\n[VNR {original_idx}] Attempting resource reservation...")
+        
+        can_reserve = True
+        
+        # Check node capacity
+        for vnode, snode in mapping.items():
+            if not can_place_node(substrate, snode, vnr.nodes[vnode]['cpu']):
+                can_reserve = False
+                if verbose:
+                    print(f"   Cannot reserve node {snode} for vnode {vnode}")
+                break
+        
+        if can_reserve:
+            # Check link capacity
+            for (u, v), path in link_paths.items():
+                bw = vnr.edges[u, v]['bw']
+                for i in range(len(path) - 1):
+                    if substrate[path[i]][path[i+1]]['bw'] < bw:
+                        can_reserve = False
+                        if verbose:
+                            print(f"   Cannot reserve edge ({path[i]},{path[i+1]}) for link ({u},{v})")
+                        break
+                if not can_reserve:
+                    break
+        
+        if can_reserve:
+            # Reserve resources
+            if verbose:
+                print(f"   Reserving resources...")
+            
+            for vnode, snode in mapping.items():
+                reserve_node(substrate, snode, vnr.nodes[vnode]['cpu'])
+            
+            for (u, v), path in link_paths.items():
+                reserve_path(substrate, path, vnr.edges[u, v]['bw'])
+            
+            repair_accepted.append((vnr, mapping, link_paths))
+            if verbose:
+                print(f"   VNR {original_idx} RECOVERED via two-stage repair!")
+        else:
+            if verbose:
+                print(f"   Reservation failed for VNR {original_idx}")
+            final_rejected.append(vnr)
+    
+    # Merge repair accepted with original accepted
+    accepted.extend(repair_accepted)
+    
+    if verbose:
+        print(f"\n{'#'*60}")
+        print(f"# TWO-STAGE REPAIR SUMMARY")
+        print(f"# Total rejected VNRs: {len(rejected)}")
+        print(f"# Recovered VNRs: {len(repair_accepted)}")
+        print(f"# Still rejected: {len(final_rejected)}")
+        print(f"# Recovery rate: {len(repair_accepted)/len(rejected)*100:.1f}%")
+        print(f"{'#'*60}\n")
+    
+    return accepted, final_rejected

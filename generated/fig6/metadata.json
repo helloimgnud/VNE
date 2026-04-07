@@ -1,0 +1,23 @@
+{
+  "experiment": "fig6",
+  "description": "Impact of Virtual Nodes",
+  "vnode_range": [
+    2,
+    4,
+    6,
+    8
+  ],
+  "num_domains": 4,
+  "num_vnrs": 2000,
+  "substrate_path": "dataset\\fig6\\substrate.json",
+  "vnr_configs": {
+    "2nodes": "dataset\\fig6\\vnr_2nodes.json",
+    "4nodes": "dataset\\fig6\\vnr_4nodes.json",
+    "6nodes": "dataset\\fig6\\vnr_6nodes.json",
+    "8nodes": "dataset\\fig6\\vnr_8nodes.json"
+  },
+  "seeds": {
+    "substrate": 42,
+    "vnr_base": 100
+  }
+}

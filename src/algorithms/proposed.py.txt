@@ -1,0 +1,320 @@
+# src/algorithms/proposed.py
+import random
+import copy
+
+# Updated imports from the new hpso.py
+from algorithms.hpso import (
+    operation_minus,
+    operation_plus,
+    operation_multiply,
+    sa_neighbor,
+    init_particles_hpso
+)
+
+from utils.graph_utils import (
+    shortest_path_with_capacity,
+    can_place_node,
+    reserve_node,
+    reserve_path
+)
+
+from evaluation.eval import cost_of_embedding
+
+INFEASIBLE_FITNESS = -1e12
+
+
+# ============================================================
+# Data Structures
+# ============================================================
+
+class Individual:
+    def __init__(self, particle, velocity, fitness):
+        self.particle = particle
+        self.velocity = velocity
+        self.fitness = fitness
+
+
+class MappingSolution:
+    def __init__(self, vnr, particle, mapping, link_paths, fitness):
+        self.vnr = vnr
+        self.particle = particle
+        self.mapping = mapping
+        self.link_paths = link_paths
+        self.fitness = fitness
+
+
+class VNRContext:
+    """
+    Each VNR is solved by exactly ONE algorithm
+    """
+    def __init__(self, vnr, algo, pop, pbest=None):
+        self.vnr = vnr
+        self.algo = algo          # "PSO" or "VNS"
+        self.pop = pop
+        self.pbest = pbest        # only for PSO
+        self.hist = []            # best fitness history
+
+
+# ============================================================
+# Fitness = -Cost
+# ============================================================
+
+def compute_fitness(vnr, particle, substrate):
+    vnodes = list(vnr.nodes())
+    mapping = {vnodes[i]: particle[i] for i in range(len(vnodes))}
+    link_paths = {}
+
+    for u, v in vnr.edges():
+        su = mapping[u]
+        sv = mapping[v]
+        bw_req = vnr.edges[u, v]['bw']
+
+        path = shortest_path_with_capacity(substrate, su, sv, bw_req)
+        if path is None:
+            return None, None, None, INFEASIBLE_FITNESS
+
+        link_paths[(u, v)] = path
+
+    try:
+        cost = cost_of_embedding(mapping, link_paths, vnr, substrate)
+    except Exception:
+        return None, None, None, INFEASIBLE_FITNESS
+
+    return mapping, link_paths, cost, -cost
+
+
+# ============================================================
+# Resource Commit
+# ============================================================
+
+def verify_and_allocate(substrate, solution):
+    vnr = solution.vnr
+
+    for v, s in solution.mapping.items():
+        if not can_place_node(substrate, s, vnr.nodes[v]['cpu']):
+            return False
+
+    for (u, v), path in solution.link_paths.items():
+        bw = vnr.edges[u, v]['bw']
+        for i in range(len(path) - 1):
+            if substrate.edges[path[i], path[i + 1]]['bw'] < bw:
+                return False
+
+    for v, s in solution.mapping.items():
+        reserve_node(substrate, s, vnr.nodes[v]['cpu'])
+
+    for (u, v), path in solution.link_paths.items():
+        reserve_path(substrate, path, vnr.edges[u, v]['bw'])
+
+    return True
+
+
+# ============================================================
+# Population Initialization
+# ============================================================
+
+def initialize_population(vnr, substrate, pop_size):
+    # [cite_start]Use HPSO's initialization strategy (smart sorting/allocation) [cite: 441-446]
+    particles = init_particles_hpso(substrate, vnr, pop_size)
+    
+    pop = []
+    vnodes = list(vnr.nodes())
+    
+    for particle in particles:
+        # [cite_start]Initial velocity is random 0/1 [cite: 377-378]
+        velocity = [random.randint(0, 1) for _ in vnodes]
+        _, _, _, fit = compute_fitness(vnr, particle, substrate)
+        pop.append(Individual(particle, velocity, fit))
+        
+    return pop
+
+
+# ============================================================
+# PSO Update
+# ============================================================
+
+def update_pso(pop, pbest, gbest, vnr, substrate,
+               alpha=0.5, beta=0.3, gamma=0.2):
+
+    for i, ind in enumerate(pop):
+        # Calculate velocity components (Discrete operators)
+        diff_p = operation_minus(pbest[i].particle, ind.particle)
+        diff_g = operation_minus(gbest.particle, ind.particle)
+
+        v = operation_plus(alpha, ind.velocity, beta, diff_p)
+        v = operation_plus(1 - gamma, v, gamma, diff_g)
+
+        # Update position
+        # NOTE: New API signature: (Xi, V, vnr_graph, substrate_graph)
+        ind.particle = operation_multiply(
+            ind.particle, v, vnr, substrate
+        )
+        ind.velocity = v
+
+
+# ============================================================
+# VNS Update
+# ============================================================
+
+def update_vns(pop, vnr, substrate, max_iter=5):
+    for ind in pop:
+        best_particle = ind.particle
+        _, _, _, best_fit = compute_fitness(vnr, best_particle, substrate)
+
+        for _ in range(max_iter):
+            # Use SA neighbor generation from HPSO
+            # NOTE: New API signature: (particle, substrate_graph, vnr_graph)
+            neigh = sa_neighbor(best_particle, substrate, vnr)
+            
+            _, _, _, fit = compute_fitness(vnr, neigh, substrate)
+            if fit > best_fit:
+                best_particle = neigh
+                best_fit = fit
+
+        ind.particle = best_particle
+        ind.fitness = best_fit
+
+
+# ============================================================
+# Knowledge Transfer (Domain-aware, Discrete)
+# ============================================================
+
+def transfer_knowledge(source_best, target_pop,
+                       vnr, substrate,
+                       rate=0.5):
+    """
+    Transfers genes from source_best to target_pop.
+    Checks feasibility directly against substrate since candidate_lists object
+    is no longer persistent.
+    """
+    vnodes = list(vnr.nodes())
+    sub_nodes = list(substrate.nodes())
+    
+    for ind in target_pop:
+        for i, v in enumerate(vnodes):
+            if random.random() > rate:
+                continue
+
+            gene = source_best.particle[i]
+            
+            # Check if the gene (substrate node) is feasible for this vnode
+            v_cpu = vnr.nodes[v]['cpu']
+            s_cpu = substrate.nodes[gene]['cpu']
+            
+            if s_cpu >= v_cpu:
+                ind.particle[i] = gene
+            else:
+                # If transfer is invalid, pick a random valid candidate
+                candidates = [s for s in sub_nodes if substrate.nodes[s]['cpu'] >= v_cpu]
+                if candidates:
+                    ind.particle[i] = random.choice(candidates)
+
+
+def is_stagnant(hist, window=5, eps=1e-4):
+    if len(hist) < window:
+        return False
+    return abs(hist[-1] - hist[-window]) < eps
+
+
+# ============================================================
+# Core MP-PVA (Cross-VNR)
+# ============================================================
+
+def run_algorithm(vnr_list, substrate_snapshot,
+               pop_size=20, generations=30):
+
+    contexts = []
+
+    # ---- Assign ONE algorithm per VNR ----
+    for vnr in vnr_list:
+        algo = "PSO" if random.random() < 0.5 else "VNS"
+        pop = initialize_population(vnr, substrate_snapshot, pop_size)
+        pbest = copy.deepcopy(pop) if algo == "PSO" else None
+        contexts.append(VNRContext(vnr, algo, pop, pbest))
+
+    # ---- Evolution ----
+    for gen in range(generations):
+
+        # --- Step each VNR ---
+        for ctx in contexts:
+            vnr = ctx.vnr
+            
+            if ctx.algo == "PSO":
+                gbest = max(ctx.pop, key=lambda x: x.fitness)
+                update_pso(ctx.pop, ctx.pbest, gbest,
+                           vnr, substrate_snapshot)
+
+                for i in range(len(ctx.pop)):
+                    _, _, _, fit = compute_fitness(
+                        vnr, ctx.pop[i].particle, substrate_snapshot
+                    )
+                    ctx.pop[i].fitness = fit
+                    if fit > ctx.pbest[i].fitness:
+                        ctx.pbest[i] = copy.deepcopy(ctx.pop[i])
+
+                gbest = max(ctx.pop, key=lambda x: x.fitness)
+                ctx.hist.append(gbest.fitness)
+
+            else:  # VNS
+                update_vns(ctx.pop, vnr, substrate_snapshot)
+                gbest = max(ctx.pop, key=lambda x: x.fitness)
+                ctx.hist.append(gbest.fitness)
+
+        # --- Cross-VNR Knowledge Transfer ---
+        for ctx in contexts:
+            if not is_stagnant(ctx.hist):
+                continue
+
+            donors = [c for c in contexts if c.algo != ctx.algo]
+            if not donors:
+                continue
+
+            donor = random.choice(donors)
+            donor_best = max(donor.pop, key=lambda x: x.fitness)
+
+            transfer_knowledge(
+                donor_best,
+                ctx.pop,
+                ctx.vnr,
+                substrate_snapshot
+            )
+
+    # ---- Collect solutions ----
+    solutions = []
+    for ctx in contexts:
+        best = max(ctx.pop, key=lambda x: x.fitness)
+        mapping, paths, _, fit = compute_fitness(
+            ctx.vnr, best.particle, substrate_snapshot
+        )
+        solutions.append(
+            MappingSolution(ctx.vnr, best.particle, mapping, paths, fit)
+        )
+
+    return solutions
+
+def embed_batch(substrate, batch,
+                        pop_size=20,
+                        generations=30):
+
+    accepted = []
+    rejected = []
+
+    vnr_list = [vnr for vnr, _ in batch]
+    snapshot = copy.deepcopy(substrate)
+
+    solutions = run_algorithm(
+        vnr_list,
+        snapshot,
+        pop_size,
+        generations
+    )
+
+    for sol in solutions:
+        if sol.mapping is None:
+            rejected.append(sol.vnr)
+        elif verify_and_allocate(substrate, sol):
+            accepted.append((sol.vnr, sol.mapping, sol.link_paths))
+        else:
+            rejected.append(sol.vnr)
+
+    return accepted, rejected

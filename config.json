@@ -1,0 +1,46 @@
+{
+  "seed": 42,
+  "output_dir": "results",
+  "algorithms": ["baseline", "d_vine_sp", "pso", "hpso"],
+
+  "substrate": {
+    "num_domains": 4,
+    "num_nodes_total": 50,
+    "p_intra": 0.5,
+    "p_inter": 0.05,
+    "cpu_range": [100, 300],
+    "bw_range": [1000, 3000],
+    "node_cost_range": [1, 10],
+    "inter_domain_bw_cost": [5, 15]
+  },
+
+  "vnr": {
+    "num_nodes": 8,
+    "edge_prob": 0.75,
+    "cpu_range": [80, 150],
+    "bw_range": [100, 2000]
+  },
+
+  "experiment": {
+    "num_vnrs": 40
+  },
+
+  "pso": {
+    "particles": 30,
+    "iterations": 50,
+    "w_max": 0.9,
+    "w_min": 0.4,
+    "beta": 0.3,
+    "gamma": 0.4
+  },
+
+  "hpso": {
+    "particles": 30,
+    "iterations": 50,
+    "w_max": 0.9,
+    "w_min": 0.4,
+    "beta": 0.3,
+    "gamma": 0.4,
+    "cooling_rate": 0.9
+  }
+}

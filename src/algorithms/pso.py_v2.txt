@@ -1,0 +1,224 @@
+# src/algorithms/pso.py
+import random
+import numpy as np
+from utils.graph_utils import shortest_path_with_capacity, reserve_node, reserve_path
+import heapq
+
+
+INFEASIBLE_PENALTY = 1e9
+
+def fast_fitness(particle, substrate_graph, vnr_graph):
+    """
+    Fast fitness:
+    - check CPU feasibility
+    - estimate link cost by hop proxy
+    """
+    mapping = {}
+    vnodes = list(vnr_graph.nodes())
+
+    for i, v in enumerate(vnodes):
+        s = particle[i]
+        # Kiểm tra node có tồn tại trong substrate không
+        if s not in substrate_graph.nodes:
+             return INFEASIBLE_PENALTY
+             
+        if substrate_graph.nodes[s]['cpu'] < vnr_graph.nodes[v]['cpu']:
+            return INFEASIBLE_PENALTY
+        mapping[v] = s
+
+    est_link_cost = 0
+    for (u, v) in vnr_graph.edges():
+        if mapping[u] != mapping[v]:
+            est_link_cost += vnr_graph.edges[u, v]['bw']
+
+    return est_link_cost
+
+def create_candidate_lists(substrate_graph, vnr_graph):
+    candidate_lists = {}
+    sub_nodes = list(substrate_graph.nodes())
+
+    for v in vnr_graph.nodes():
+        v_cpu = vnr_graph.nodes[v]['cpu']
+        v_domain = vnr_graph.nodes[v].get('domain')
+
+        candidates = []
+        for s in sub_nodes:
+            if substrate_graph.nodes[s]['cpu'] < v_cpu:
+                continue
+            s_domain = substrate_graph.nodes[s].get('domain')
+            if v_domain is not None and s_domain is not None and v_domain != s_domain:
+                continue
+            candidates.append(s)
+
+        if not candidates:
+            return None
+
+        candidate_lists[v] = candidates
+
+    return candidate_lists
+
+
+def build_full_solution(particle, substrate_graph, vnr_graph, path_cache=None):
+    # path_cache is optional now
+    if path_cache is None: path_cache = {}
+        
+    mapping = {}
+    vnodes = list(vnr_graph.nodes())
+
+    for i, v in enumerate(vnodes):
+        s = particle[i]
+        if substrate_graph.nodes[s]['cpu'] < vnr_graph.nodes[v]['cpu']:
+            return None, None
+        mapping[v] = s
+
+    link_paths = {}
+    for (u, v) in vnr_graph.edges():
+        bw = vnr_graph.edges[u, v]['bw']
+        key = (mapping[u], mapping[v], bw)
+
+        if key in path_cache:
+            path = path_cache[key]
+        else:
+            path = shortest_path_with_capacity(
+                substrate_graph, mapping[u], mapping[v], bw
+            )
+            path_cache[key] = path
+
+        if path is None:
+            return None, None
+
+        link_paths[(u, v)] = path
+
+    return mapping, link_paths
+
+def operation_minus(Xi, Xj):
+    return [1 if Xi[k] == Xj[k] else 0 for k in range(len(Xi))]
+
+
+def operation_plus(p, Vi, q, Vj):
+    res = []
+    for i in range(len(Vi)):
+        if Vi[i] == Vj[i]:
+            res.append(Vi[i])
+        else:
+            res.append(Vi[i] if random.random() < p else Vj[i])
+    return res
+
+
+def operation_multiply(Xi, V, vnr_graph, candidate_lists):
+    Xnew = Xi.copy()
+    vnodes = list(vnr_graph.nodes())
+
+    for i in range(len(V)):
+        if V[i] == 0:
+            v = vnodes[i]
+            candidates = candidate_lists[v]
+            alt = [s for s in candidates if s != Xi[i]]
+            if alt:
+                Xnew[i] = random.choice(alt)
+    return Xnew
+
+def build_and_reserve(particle, substrate_graph, vnr_graph):
+    mapping = {}
+    vnodes = list(vnr_graph.nodes())
+
+    # node mapping
+    for i, v in enumerate(vnodes):
+        s = particle[i]
+        if substrate_graph.nodes[s]['cpu'] < vnr_graph.nodes[v]['cpu']:
+            return None, None
+        mapping[v] = s
+
+    link_paths = {}
+    for (u, v) in vnr_graph.edges():
+        bw = vnr_graph.edges[u, v]['bw']
+        path = shortest_path_with_capacity(
+            substrate_graph, mapping[u], mapping[v], bw
+        )
+        if path is None:
+            return None, None
+        link_paths[(u, v)] = path
+
+    # reserve
+    for v, s in mapping.items():
+        reserve_node(substrate_graph, s, vnr_graph.nodes[v]['cpu'])
+    for (u, v), path in link_paths.items():
+        reserve_path(substrate_graph, path, vnr_graph.edges[u, v]['bw'])
+
+    return mapping, link_paths
+
+def pso_embed(
+    substrate_graph,
+    vnr_graph,
+    particles=20,
+    iterations=30,
+    beta=0.3,
+    gamma=0.4,
+    w_max=0.9,
+    w_min=0.4
+):
+    vnodes = list(vnr_graph.nodes())
+    num_v = len(vnodes)
+
+    candidate_lists = create_candidate_lists(substrate_graph, vnr_graph)
+    if candidate_lists is None:
+        return None
+
+    # ----- init swarm -----
+    swarm = []
+    velocities = []
+    for _ in range(particles):
+        swarm.append([random.choice(candidate_lists[v]) for v in vnodes])
+        velocities.append([random.randint(0, 1) for _ in range(num_v)])
+
+    pbest = [p.copy() for p in swarm]
+    pbest_cost = [INFEASIBLE_PENALTY] * particles
+    gbest = None
+    gbest_cost = INFEASIBLE_PENALTY
+
+    # ----- PSO loop -----
+    for it in range(iterations):
+        alpha = w_max - (w_max - w_min) * it / iterations
+        total = alpha + beta + gamma
+        if total == 0: # Avoid division by zero
+             a, b, c = 0.33, 0.33, 0.33
+        else:
+             a, b, c = alpha / total, beta / total, gamma / total
+
+        for i in range(particles):
+            # [MODIFIED] Bỏ qua check build_and_reserve mỗi bước để tăng tốc
+            # (chỉ kiểm tra fitness nhanh), nhưng nếu muốn chắc chắn tìm ra
+            # thì có thể uncomment dòng dưới (sẽ chậm hơn).
+            # mapping, link_paths = build_and_reserve(...)
+            # if mapping: return mapping, link_paths
+
+            cost = fast_fitness(swarm[i], substrate_graph, vnr_graph)
+
+            if cost < pbest_cost[i]:
+                pbest_cost[i] = cost
+                pbest[i] = swarm[i].copy()
+
+            if cost < gbest_cost:
+                gbest_cost = cost
+                gbest = swarm[i].copy()
+
+        # [REMOVED] Early stopping block (stall check) removed here
+
+        # ----- velocity + position update -----
+        for i in range(particles):
+            dp = operation_minus(pbest[i], swarm[i])
+            # Handle case where gbest is not set yet (all infeasible)
+            dg = operation_minus(gbest, swarm[i]) if gbest else [0]*num_v
+
+            tmp = operation_plus(a, velocities[i], b, dp)
+            velocities[i] = operation_plus(1 - c, tmp, c, dg)
+
+            swarm[i] = operation_multiply(
+                swarm[i], velocities[i], vnr_graph, candidate_lists
+            )
+
+    # Sau khi chạy hết vòng lặp, thử build giải pháp tốt nhất tìm được
+    if gbest is not None:
+        return build_and_reserve(gbest, substrate_graph, vnr_graph)
+    
+    return None
