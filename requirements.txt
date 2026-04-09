@@ -8,9 +8,9 @@ matplotlib>=3.8
 ortools>=9.8
 
 # ===== ML =====
-torch==2.3.0
-torchvision
-torchaudio
+torch==2.2.2
+torchvision==0.17.2
+torchaudio==2.2.2
 torchdata==0.7.1
 stable-baselines3>=2.3.0
 
@@ -28,5 +28,3 @@ numba>=0.59
 # ===== Plotting =====
 seaborn>=0.13
 plotly>=5.20
-
-emoji

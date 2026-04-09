@@ -5,6 +5,22 @@ def revenue_of_vnr(vnr_graph):
     bw = sum(vnr_graph.edges[e]['bw'] for e in vnr_graph.edges())
     return cpu + bw
 
+
+def cost_of_vnr(vnr_graph, mapping=None, link_paths=None):
+    """
+    Lightweight cost proxy for a VNR.
+
+    If mapping / link_paths are not provided (or substrate costs are unavailable),
+    falls back to summing raw CPU + BW demands — a useful training signal even
+    without the full substrate-aware cost.
+
+    For substrate-aware cost use cost_of_embedding() instead.
+    """
+    cpu_cost = sum(vnr_graph.nodes[n].get('cpu', 0.0) for n in vnr_graph.nodes())
+    bw_cost  = sum(vnr_graph.edges[e].get('bw',  0.0) for e in vnr_graph.edges())
+    return cpu_cost + bw_cost
+
+
 def cost_of_embedding(mapping, link_paths, vnr_graph, substrate_graph=None):
     if substrate_graph is None:
         raise ValueError("substrate_graph must be provided for cost calculation with costs.")
