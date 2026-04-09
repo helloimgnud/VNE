@@ -1,8 +1,7 @@
---extra-index-url https://download.pytorch.org/whl/cpu
---extra-index-url https://data.dgl.ai/wheels/torch-2.2/repo.html
+# Use the CUDA 12.1 DGL wheels to match PyPI's default PyTorch CUDA wheels
+--extra-index-url https://data.dgl.ai/wheels/torch-2.2/cu121/repo.html
 
 # ===== Core =====
-# Pin numpy < 2.0.0 to prevent incompatibility with PyTorch 2.2.x and DGL 2.x
 numpy>=1.26.0,<2.0.0
 pandas>=2.2.0
 networkx>=3.1
@@ -13,6 +12,7 @@ scipy>=1.11.0
 ortools>=9.8.0
 
 # ===== ML =====
+# PyPI defaults to CUDA 12.1 for these
 torch==2.2.1
 torchvision==0.17.1
 torchaudio==2.2.1
@@ -20,7 +20,6 @@ torchdata==0.7.1
 stable-baselines3>=2.3.0
 
 # ===== Graph =====
-# Requires the DGL torch-2.2 wheels repository (added at the top)
 dgl==2.1.0
 
 # ===== Utils =====
