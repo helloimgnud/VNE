@@ -15,9 +15,7 @@ import dgl
 from typing import Callable, Dict, List, Optional, Tuple
 
 from src.rl.networks import VNRSchedulerNetwork
-from src.rl.utils import DEFAULT_CFG, build_vnr_dgl, build_substrate_dgl
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from src.rl.utils import DEFAULT_CFG, build_vnr_dgl, build_substrate_dgl, device
 
 
 class VNRSchedulerAgent(VNRSchedulerNetwork):

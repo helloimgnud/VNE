@@ -26,7 +26,7 @@ import dgl
 import dgl.nn.pytorch.conv as dglnn
 from typing import List, Optional, Tuple
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from src.rl.utils import device
 
 
 # ---------------------------------------------------------------------------

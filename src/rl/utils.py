@@ -15,7 +15,18 @@ import dgl
 import networkx as nx
 from typing import Optional
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def _get_device():
+    if torch.cuda.is_available():
+        try:
+            # Test if DGL supports CUDA
+            g = dgl.graph(([0], [0]))
+            g.to('cuda')
+            return torch.device('cuda')
+        except Exception:
+            print("[WARNING] PyTorch has CUDA, but DGL is CPU-only. Falling back to CPU.")
+    return torch.device('cpu')
+
+device = _get_device()
 
 # ---------------------------------------------------------------------------
 # Default hyper-parameter configuration
