@@ -1,30 +1,35 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://data.dgl.ai/wheels/torch-2.2/repo.html
+
 # ===== Core =====
-numpy>=1.26
-pandas>=2.2
+# Pin numpy < 2.0.0 to prevent incompatibility with PyTorch 2.2.x and DGL 2.x
+numpy>=1.26.0,<2.0.0
+pandas>=2.2.0
 networkx>=3.1
-matplotlib>=3.8
+matplotlib>=3.8.0
+scipy>=1.11.0
 
 # ===== Optimization =====
-ortools>=9.8
+ortools>=9.8.0
 
 # ===== ML =====
 torch==2.2.2
 torchvision==0.17.2
 torchaudio==2.2.2
-torchdata==0.7.1
 stable-baselines3>=2.3.0
 
 # ===== Graph =====
+# Requires the DGL torch-2.2 wheels repository (added at the top)
 dgl==2.1.0
 
 # ===== Utils =====
-tqdm>=4.65
+tqdm>=4.65.0
 pyyaml>=6.0
-tensorboard>=2.16
+tensorboard>=2.16.0
 
 # ===== Performance =====
-numba>=0.59
+numba>=0.59.0
 
 # ===== Plotting =====
-seaborn>=0.13
-plotly>=5.20
+seaborn>=0.13.0
+plotly>=5.20.0
