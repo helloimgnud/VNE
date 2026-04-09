@@ -25,6 +25,7 @@ from src.rl.networks import (
 from src.rl.agent import VNRSchedulerAgent
 from src.rl.env import SchedulerEnv
 from src.rl.trainer import PPOTrainer
+from src.rl.curriculum import CurriculumManager
 from src.rl.utils import build_vnr_dgl, build_substrate_dgl, DEFAULT_CFG
 
 __all__ = [
@@ -41,6 +42,7 @@ __all__ = [
     "VNRSchedulerAgent",
     "SchedulerEnv",
     "PPOTrainer",
+    "CurriculumManager",
     # Utilities
     "build_vnr_dgl",
     "build_substrate_dgl",
