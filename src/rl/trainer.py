@@ -95,18 +95,35 @@ class PPOTrainer:
     @staticmethod
     def compute_reward(result, vnr, penalty: float = 0.1) -> float:
         """
-        r_t = Revenue/Cost  if HPSO succeeds
-        r_t = -penalty      if HPSO fails
+        r_t = Revenue / EmbeddingCost   if HPSO succeeds
+        r_t = -penalty                  if HPSO fails
+
+        EmbeddingCost = sum of substrate hops used for all virtual links.
+        This is the true cost of the embedding on the physical topology.
+        Using VNR demand (cpu+bw) as both revenue AND cost gives RC=1 always.
+
+        Revenue = sum(cpu_demand) + sum(bw_demand)   [from VNR]
+        Cost    = sum(bw_demand * path_length)        [actual substrate usage]
         """
         if result is None:
             return -penalty
         try:
             from src.evaluation.eval import revenue_of_vnr
-            rev = revenue_of_vnr(vnr)
-            # Simple cost proxy (full substrate cost needs substrate graph;
-            # if cost_of_embedding is needed import from eval.py)
-            cost = (sum(vnr.nodes[n].get('cpu', 1.0) for n in vnr.nodes()) +
-                    sum(vnr.edges[e].get('bw', 1.0)  for e in vnr.edges()))
+            mapping, link_paths = result
+            rev = revenue_of_vnr(vnr)  # cpu + bw demands
+
+            # Real embedding cost: bandwidth × hops for each virtual link
+            cost = 0.0
+            for edge in vnr.edges():
+                bw_req = vnr.edges[edge].get('bw', 1.0)
+                path   = link_paths.get(edge) or link_paths.get((edge[1], edge[0]))
+                hops   = (len(path) - 1) if path and len(path) > 1 else 1
+                cost  += bw_req * hops
+
+            # Add node embedding cost: cpu demand (allocated on physical node)
+            for vnode in vnr.nodes():
+                cost += vnr.nodes[vnode].get('cpu', 1.0)
+
             return rev / max(cost, 1e-6)
         except Exception:
             return 0.0
@@ -184,10 +201,19 @@ class PPOTrainer:
                 try:
                     from src.evaluation.eval import revenue_of_vnr
                     rev = revenue_of_vnr(vnr)
-                    cost = (sum(vnr.nodes[n].get('cpu', 1.0) for n in vnr.nodes()) +
-                            sum(vnr.edges[e].get('bw',  1.0) for e in vnr.edges()))
+
+                    # Real embedding cost: bw * hops per virtual link + cpu per vnode
+                    emb_cost = 0.0
+                    for edge in vnr.edges():
+                        bw_req = vnr.edges[edge].get('bw', 1.0)
+                        path   = link_paths.get(edge) or link_paths.get((edge[1], edge[0]))
+                        hops   = (len(path) - 1) if path and len(path) > 1 else 1
+                        emb_cost += bw_req * hops
+                    for vnode in vnr.nodes():
+                        emb_cost += vnr.nodes[vnode].get('cpu', 1.0)
+
                     rev_list.append(rev)
-                    cost_list.append(cost)
+                    cost_list.append(emb_cost)
                 except Exception:
                     pass
             else:
@@ -251,11 +277,17 @@ class PPOTrainer:
         rc_ratio = (sum(rev_list) / sum(cost_list)
                     if cost_list and sum(cost_list) > 0 else 0.0)
 
+        import statistics
+        reward_mean = sum(rewards) / len(rewards) if rewards else 0.0
+        reward_std  = statistics.stdev(rewards) if len(rewards) > 1 else 0.0
+
         metrics = dict(
             acc_rate     = acc_rate,
             rc_ratio     = rc_ratio,
             avg_revenue  = sum(rev_list)  / len(rev_list)  if rev_list  else 0.0,
             avg_cost     = sum(cost_list) / len(cost_list) if cost_list else 0.0,
+            reward_mean  = reward_mean,
+            reward_std   = reward_std,
             total_loss   = total_loss_val,
             policy_loss  = policy_loss_val,
             value_loss   = value_loss_val,

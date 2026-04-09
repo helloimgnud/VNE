@@ -334,12 +334,15 @@ def main():
         # --- Periodic logging ---
         if ep % 10 == 0:
             recent = history[-10:]
-            avg_acc  = np.mean([h['acc_rate']   for h in recent])
-            avg_rc   = np.mean([h['rc_ratio']   for h in recent])
-            avg_loss = np.mean([h['total_loss'] for h in recent])
-            elapsed  = time.time() - t0
+            avg_acc    = np.mean([h['acc_rate']    for h in recent])
+            avg_rc     = np.mean([h['rc_ratio']    for h in recent])
+            avg_loss   = np.mean([h['total_loss']  for h in recent])
+            avg_rew    = np.mean([h['reward_mean'] for h in recent])
+            avg_rstd   = np.mean([h['reward_std']  for h in recent])
+            elapsed    = time.time() - t0
             print(f"Ep {ep:4d}/{args.episodes} | "
-                  f"AccRate={avg_acc:.3f} | RC={avg_rc:.3f} | "
+                  f"Acc={avg_acc:.3f} | RC={avg_rc:.3f} | "
+                  f"R={avg_rew:.3f}±{avg_rstd:.3f} | "
                   f"Loss={avg_loss:.4f} | {elapsed:.0f}s")
 
         # --- Periodic evaluation ---
