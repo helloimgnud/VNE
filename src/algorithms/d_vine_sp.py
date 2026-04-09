@@ -1,7 +1,7 @@
 # src/algorithms/d_vine_sp.py
 from ortools.linear_solver import pywraplp
 import networkx as nx
-from utils.graph_utils import shortest_path_with_capacity, reserve_node, reserve_path, release_node, release_path
+from src.utils.graph_utils import shortest_path_with_capacity, reserve_node, reserve_path, release_node, release_path
 
 
 def create_candidates_dict_with_domain(substrate_graph, vnr_graph):

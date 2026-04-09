@@ -3,7 +3,7 @@
 import random
 import math
 import numpy as np
-from utils.graph_utils import shortest_path_with_capacity, reserve_node, reserve_path
+from src.utils.graph_utils import shortest_path_with_capacity, reserve_node, reserve_path
 
 INFEASIBLE_PENALTY = 1e9
 INFEASIBLE_FITNESS = -INFEASIBLE_PENALTY
@@ -630,7 +630,7 @@ INFEASIBLE_FITNESS = -INFEASIBLE_PENALTY
 import random
 import math
 import copy
-from utils.graph_utils import shortest_path_with_capacity, reserve_node, reserve_path
+from src.utils.graph_utils import shortest_path_with_capacity, reserve_node, reserve_path
 
 INFEASIBLE_PENALTY = 1e9
 

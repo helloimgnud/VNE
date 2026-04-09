@@ -218,7 +218,7 @@
 import random
 import numpy as np
 import networkx as nx
-from utils.graph_utils import shortest_path_with_capacity, reserve_node, reserve_path
+from src.utils.graph_utils import shortest_path_with_capacity, reserve_node, reserve_path
 import heapq
 
 INFEASIBLE_PENALTY = 1e9

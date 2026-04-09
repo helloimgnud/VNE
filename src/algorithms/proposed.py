@@ -3,7 +3,7 @@ import random
 import copy
 
 # Updated imports from the new hpso.py
-from algorithms.hpso import (
+from src.algorithms.hpso import (
     operation_minus,
     operation_plus,
     operation_multiply,
@@ -11,14 +11,14 @@ from algorithms.hpso import (
     init_particles_hpso
 )
 
-from utils.graph_utils import (
+from src.utils.graph_utils import (
     shortest_path_with_capacity,
     can_place_node,
     reserve_node,
     reserve_path
 )
 
-from evaluation.eval import cost_of_embedding
+from src.evaluation.eval import cost_of_embedding
 
 # Fitness thấp vô cùng cho giải pháp không khả thi
 INFEASIBLE_FITNESS = -1e9

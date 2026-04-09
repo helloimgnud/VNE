@@ -19,21 +19,21 @@ from multiprocessing import Pool, cpu_count
 
 import networkx as nx
 
-from evaluation.eval import revenue_of_vnr
-from algorithms.fast_hpso import (
+from src.evaluation.eval import revenue_of_vnr
+from src.algorithms.fast_hpso import (
     operation_minus,
     operation_plus,
     operation_multiply,
     sa_neighbor,
     init_particles_hpso,
 )
-from algorithms.proposed import (
+from src.algorithms.proposed import (
     Individual,
     build_full_solution_check,
     verify_and_allocate,
     INFEASIBLE_FITNESS,
 )
-from utils.graph_utils import (
+from src.utils.graph_utils import (
     can_place_node,
     reserve_node,
     reserve_path,
@@ -403,7 +403,7 @@ def embed_batch(
     # ---- Phase 2: reservation with optional RL admission control ----
     ac = None
     if ac_model_path is not None:
-        from algorithms.ac_controller import AdmissionController
+        from src.algorithms.ac_controller import AdmissionController
         ac = AdmissionController(ac_model_path)
         if verbose:
             print('[AC] RL admission controller loaded')

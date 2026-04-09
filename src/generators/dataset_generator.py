@@ -7,7 +7,7 @@ Separated from experiment logic for better modularity.
 
 import os
 import json
-from generators.generator import generate_substrate, generate_vnr_stream_v2
+from src.generators.generator import generate_substrate, generate_vnr_stream_v2
 
 
 class DatasetGenerator:

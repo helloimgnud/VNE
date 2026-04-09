@@ -7,14 +7,14 @@ Combines:
 - Two-stage repair mechanism (node repair + link repair)
 """
 
-from evaluation.eval import revenue_of_vnr
+from src.evaluation.eval import revenue_of_vnr
 import random
 import copy
 import numpy as np
 import networkx as nx
 from multiprocessing import Pool, cpu_count
 
-from algorithms.hpso_priority import (
+from src.algorithms.hpso_priority import (
     build_domain_masks,
     build_available_masks,
     decode_priority_vector,
@@ -26,7 +26,7 @@ from algorithms.hpso_priority import (
     INFEASIBLE_PENALTY
 )
 
-from utils.graph_utils import (
+from src.utils.graph_utils import (
     can_place_node,
     reserve_node,
     reserve_path,

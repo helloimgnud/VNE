@@ -74,3 +74,9 @@ Thumbs.db
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+*.csv
+*.png
+results/
+save/
+gprl/

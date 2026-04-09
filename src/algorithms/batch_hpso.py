@@ -3,8 +3,8 @@ import copy
 import random
 import math
 from multiprocessing import Pool, cpu_count
-from utils.graph_utils import reserve_node, reserve_path
-from algorithms.fast_hpso import (
+from src.utils.graph_utils import reserve_node, reserve_path
+from src.algorithms.fast_hpso import (
     fast_fitness,
     init_particles_hpso,
     operation_minus,
@@ -22,7 +22,7 @@ def build_solution(particle, substrate_graph, vnr_graph):
     Returns:
         (mapping, link_paths, total_cost) if feasible, else (None, None, INFEASIBLE_PENALTY)
     """
-    from utils.graph_utils import shortest_path_with_capacity
+    from src.utils.graph_utils import shortest_path_with_capacity
     
     mapping = {}
     vnodes = list(vnr_graph.nodes())

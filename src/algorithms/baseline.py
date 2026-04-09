@@ -229,8 +229,8 @@
 # src/algorithms/baseline.py
 from collections import deque
 from datetime import datetime
-from utils.graph_utils import reserve_node, reserve_path
-from evaluation.eval import revenue_of_vnr
+from src.utils.graph_utils import reserve_node, reserve_path
+from src.evaluation.eval import revenue_of_vnr
 import networkx as nx
 
 

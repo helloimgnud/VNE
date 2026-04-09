@@ -1,7 +1,7 @@
 # src/core/substrate.py
 import networkx as nx
 from generators.generator import generate_substrate
-from utils.graph_utils import copy_substrate, cpu_free_list
+from src.utils.graph_utils import copy_substrate, cpu_free_list
 
 class Substrate:
     def __init__(self, G):

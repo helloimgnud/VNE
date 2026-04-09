@@ -6,8 +6,8 @@ Core simulation logic extracted from experiment.py for reusability.
 
 from collections import deque
 from datetime import datetime
-from utils.graph_utils import copy_substrate, release_node, release_path
-from evaluation.metrics import cost_of_embedding, revenue_of_vnr
+from src.utils.graph_utils import copy_substrate, release_node, release_path
+from src.evaluation.metrics import cost_of_embedding, revenue_of_vnr
 
 
 class VNRSimulator:
@@ -239,7 +239,7 @@ class BatchedVNRSimulator(VNRSimulator):
         Returns:
             Dictionary containing simulation metrics
         """
-        from simulation.batching import TimeWindowBatcher
+        from src.simulation.batching import TimeWindowBatcher
         
         self.reset()
         batcher = TimeWindowBatcher(

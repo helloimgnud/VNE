@@ -74,7 +74,7 @@ class BaseExperiment(ABC):
         Args:
             path: Optional custom path. If None, uses metadata path.
         """
-        from utils.io_utils import load_substrate_from_json
+        from src.utils.io_utils import load_substrate_from_json
         
         if path is None:
             path = self.metadata.get('substrate_path')
@@ -92,7 +92,7 @@ class BaseExperiment(ABC):
         Args:
             path: Optional custom path. If None, uses metadata path.
         """
-        from utils.io_utils import load_vnr_stream_from_json
+        from src.utils.io_utils import load_vnr_stream_from_json
         
         if path is None or not os.path.exists(path):
             raise FileNotFoundError(f"VNR stream file not found: {path}")
@@ -101,7 +101,7 @@ class BaseExperiment(ABC):
         return load_vnr_stream_from_json(path)
     
     @abstractmethod
-    def run(self):
+    def run(self, algorithms=None, num_runs=3, verbose=True):
         """
         Run the experiment.
         Must be implemented by subclasses.
@@ -212,17 +212,18 @@ class BaseExperiment(ABC):
         Returns:
             Function(substrate, vnr) -> (mapping, link_paths) or None
         """
-        from algorithms.baseline import baseline_embed_batch
-        from algorithms.d_vine_sp import d_vine_sp_embed
-        from algorithms.pso import pso_embed
-        # from algorithms.hpso import hpso_embed
-        from algorithms.fast_hpso import hpso_embed
-        from algorithms.parallel_mt_vne import embed_batch
-        from algorithms.batch_hpso import batch_hpso_embed
-        from algorithms.discrete_pso import pso_embed as discrete_pso_embed
-        from algorithms.discrete_hpso import hpso_embed as discrete_hpso_embed
-        from algorithms.hpso_priority import hpso_embed as hpso_priority_embed
-        from algorithms.parallel_hpso_priority import embed_batch as parallel_hpso_priority_embed
+        from src.algorithms.baseline import baseline_embed_batch
+        from src.algorithms.d_vine_sp import d_vine_sp_embed
+        from src.algorithms.pso import pso_embed
+        # from src.algorithms.hpso import hpso_embed
+        from src.algorithms.fast_hpso import hpso_embed
+        from src.algorithms.parallel_mt_vne import embed_batch
+        from src.algorithms.batch_hpso import batch_hpso_embed
+        from src.algorithms.discrete_pso import pso_embed as discrete_pso_embed
+        from src.algorithms.discrete_hpso import hpso_embed as discrete_hpso_embed
+        from src.algorithms.hpso_priority import hpso_embed as hpso_priority_embed
+        from src.algorithms.parallel_hpso_priority import embed_batch as parallel_hpso_priority_embed
+        from src.algorithms.hpso_batch import hpso_embed_batch
         algorithm_map = {
             'baseline': baseline_embed_batch,
             'd_vine_sp': d_vine_sp_embed,
@@ -233,10 +234,40 @@ class BaseExperiment(ABC):
             "discrete_pso": discrete_pso_embed,
             "discrete_hpso": discrete_hpso_embed,
             "hpso_priority": hpso_priority_embed,
-            "parallel_hpso_priority": parallel_hpso_priority_embed
+            "parallel_hpso_priority": parallel_hpso_priority_embed,
+            "hpso_batch": hpso_embed_batch
         }
         
         if algo_name not in algorithm_map:
             raise ValueError(f"Unknown algorithm: {algo_name}")
         
         return algorithm_map[algo_name]
+
+    def _run_algorithm(self, substrate, vnr_stream, algo_name):
+        """Run a single algorithm on a single VNR stream."""
+        from src.simulation.simulator import VNRSimulator, BatchedVNRSimulator
+        # from src.integration.ordered_pipeline import build_ordered_pipeline
+
+        if algo_name in ['baseline', 'proposed', 'proposed_KL', 'batch_hpso', 'parallel_hpso_priority', 'hpso_batch']:
+            simulator = BatchedVNRSimulator(
+                substrate, 
+                window_size=10, 
+                max_queue_delay=50
+            )
+            batch_algo = self.get_algorithm_runner(algo_name)
+            # pipeline = build_ordered_pipeline(pretrained_path='checkpoint/final.pt', train=False)
+            # metrics = simulator.simulate_batched_stream(vnr_stream, pipeline.process_batch)
+            metrics = simulator.simulate_batched_stream(
+                vnr_stream, 
+                batch_algo,
+                verbose=False
+            )
+        else:
+            simulator = VNRSimulator(substrate)
+            algo = self.get_algorithm_runner(algo_name)
+            metrics = simulator.simulate_stream(
+                vnr_stream,
+                algo,
+                verbose=False
+            )
+        return metrics

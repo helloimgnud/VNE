@@ -1,7 +1,7 @@
 import random
 import math
 from copy import deepcopy
-from algorithms.pso import build_and_reserve
+from src.algorithms.pso import build_and_reserve
 
 INFEASIBLE_PENALTY = 1e9
 V_MAX = 4

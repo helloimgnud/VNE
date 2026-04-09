@@ -3,7 +3,8 @@ Time Window Batching for VNR Requests
 Logic extracted from utils.py - manages time-window batch processing.
 """
 
-from evaluation.metrics import revenue_of_vnr
+from src.evaluation.metrics import revenue_of_vnr
+
 
 
 class TimeWindowBatcher:

@@ -4,15 +4,15 @@ Fig6 Experiment: Impact of Virtual Nodes
 Varies the number of virtual nodes while keeping domains fixed.
 Supports multiple dataset replicas for statistical significance.
 """
-
+# from src.integration.ordered_pipeline import build_ordered_pipeline
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from experiments.base_experiment import BaseExperiment
-from simulation.simulator import VNRSimulator, BatchedVNRSimulator
+from src.experiments.base_experiment import BaseExperiment
+from src.simulation.simulator import VNRSimulator, BatchedVNRSimulator
 from datetime import datetime, timezone, timedelta
-from utils.io_utils import load_substrate_from_json, load_vnr_stream_from_json
-
+from src.utils.io_utils import load_substrate_from_json, load_vnr_stream_from_json
+from src.utils import graph_utils
 class Fig6Experiment(BaseExperiment):
     """
     Experiment that varies number of virtual nodes.
@@ -52,19 +52,20 @@ class Fig6Experiment(BaseExperiment):
         print(f"   • Fixed domains: {self.domain_fixed}")
         print(f"   • Replicas: {self.num_replicas}")
     
-    def run(self, algorithms=None, verbose=True):
+    def run(self, algorithms=None, num_runs=3, verbose=True):
         """
         Run experiment for all vnode configurations across all replicas.
         
         Args:
             algorithms: List of algorithm names to test
+            num_runs: Number of runs per dataset to average heuristics
             verbose: If True, print detailed progress
             
         Returns:
             List of result records
         """
         if algorithms is None:
-            algorithms = ['baseline','proposed', 'pso', 'hpso', 'hpso_priority']
+            algorithms = ['hpso_batch', 'pso', 'hpso']
         
         print(f"\n{'='*60}")
         print(f" Running {self.experiment_name} (run_id: {self.run_id})")
@@ -104,25 +105,32 @@ class Fig6Experiment(BaseExperiment):
                     
                     # Test each algorithm
                     for algo_name in algorithms:
-                        print(f"\n Running {algo_name}...")
+                        print(f"\n Running {algo_name} ({num_runs} runs)...")
                         
-                        metrics = self._run_algorithm(substrate, vnr_stream, algo_name)
-                        
-                        record = {
-                            'replica_id': replica_id,
-                            'algorithm': algo_name,
-                            'num_vnodes': num_vnodes,
-                            'num_domains': self.domain_fixed,
-                            **metrics
-                        }
-                        
-                        all_records.append(record)
-                        
+                        algo_metrics = []
+                        for run_idx in range(num_runs):
+                            metrics = self._run_algorithm(substrate, vnr_stream, algo_name)
+                            
+                            record = {
+                                'replica_id': replica_id,
+                                'eval_run': run_idx,
+                                'algorithm': algo_name,
+                                'num_vnodes': num_vnodes,
+                                'num_domains': self.domain_fixed,
+                                **metrics
+                            }
+                            all_records.append(record)
+                            algo_metrics.append(metrics)
+                            
                         if verbose:
-                            print(f"   ✓ Acceptance Ratio: {metrics['acceptance_ratio']:.2%}")
-                            print(f"   ✓ Avg Cost: {metrics['avg_cost']:.2f}")
-                            print(f"   ✓ Avg Revenue: {metrics['avg_revenue']:.2f}")
-                            print(f"   ✓ Avg Time: {metrics['avg_execution_time']:.4f}s")
+                            acc_mean = np.mean([m['acceptance_ratio'] for m in algo_metrics])
+                            cost_mean = np.mean([m['avg_cost'] for m in algo_metrics])
+                            rev_mean = np.mean([m['avg_revenue'] for m in algo_metrics])
+                            time_mean = np.mean([m['avg_execution_time'] for m in algo_metrics])
+                            print(f"   ✓ Mean Acceptance Ratio: {acc_mean:.2%}")
+                            print(f"   ✓ Mean Cost: {cost_mean:.2f}")
+                            print(f"   ✓ Mean Revenue: {rev_mean:.2f}")
+                            print(f"   ✓ Mean Time: {time_mean:.4f}s")
         else:
             # Legacy format (single dataset, no replicas)
             substrate = self.load_substrate()
@@ -136,25 +144,32 @@ class Fig6Experiment(BaseExperiment):
                 vnr_stream = self.load_vnr_stream(vnr_path)
                 
                 for algo_name in algorithms:
-                    print(f"\n Running {algo_name}...")
+                    print(f"\n Running {algo_name} ({num_runs} runs)...")
                     
-                    metrics = self._run_algorithm(substrate, vnr_stream, algo_name)
-                    
-                    record = {
-                        'replica_id': 0,
-                        'algorithm': algo_name,
-                        'num_vnodes': num_vnodes,
-                        'num_domains': self.domain_fixed,
-                        **metrics
-                    }
-                    
-                    all_records.append(record)
-                    
+                    algo_metrics = []
+                    for run_idx in range(num_runs):
+                        metrics = self._run_algorithm(substrate, vnr_stream, algo_name)
+                        
+                        record = {
+                            'replica_id': 0,
+                            'eval_run': run_idx,
+                            'algorithm': algo_name,
+                            'num_vnodes': num_vnodes,
+                            'num_domains': self.domain_fixed,
+                            **metrics
+                        }
+                        all_records.append(record)
+                        algo_metrics.append(metrics)
+                        
                     if verbose:
-                        print(f"   ✓ Acceptance Ratio: {metrics['acceptance_ratio']:.2%}")
-                        print(f"   ✓ Avg Cost: {metrics['avg_cost']:.2f}")
-                        print(f"   ✓ Avg Revenue: {metrics['avg_revenue']:.2f}")
-                        print(f"   ✓ Avg Time: {metrics['avg_execution_time']:.4f}s")
+                        acc_mean = np.mean([m['acceptance_ratio'] for m in algo_metrics])
+                        cost_mean = np.mean([m['avg_cost'] for m in algo_metrics])
+                        rev_mean = np.mean([m['avg_revenue'] for m in algo_metrics])
+                        time_mean = np.mean([m['avg_execution_time'] for m in algo_metrics])
+                        print(f"   ✓ Mean Acceptance Ratio: {acc_mean:.2%}")
+                        print(f"   ✓ Mean Cost: {cost_mean:.2f}")
+                        print(f"   ✓ Mean Revenue: {rev_mean:.2f}")
+                        print(f"   ✓ Mean Time: {time_mean:.4f}s")
         
         # Save results
         self.save_results(all_records)
@@ -165,30 +180,6 @@ class Fig6Experiment(BaseExperiment):
         print(f"{'='*60}\n")
         
         return all_records
-    
-    def _run_algorithm(self, substrate, vnr_stream, algo_name):
-        """Run a single algorithm on a single VNR stream."""
-        if algo_name in ['baseline', 'proposed', 'proposed_KL', 'batch_hpso', 'parallel_hpso_priority']:
-            simulator = BatchedVNRSimulator(
-                substrate, 
-                window_size=10, 
-                max_queue_delay=50
-            )
-            batch_algo = self.get_algorithm_runner(algo_name)
-            metrics = simulator.simulate_batched_stream(
-                vnr_stream, 
-                batch_algo,
-                verbose=False
-            )
-        else:
-            simulator = VNRSimulator(substrate)
-            algo = self.get_algorithm_runner(algo_name)
-            metrics = simulator.simulate_stream(
-                vnr_stream,
-                algo,
-                verbose=False
-            )
-        return metrics
     
     def plot(self, run_id=None, compare_runs=False):
         """
