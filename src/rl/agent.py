@@ -98,6 +98,7 @@ class VNRSchedulerAgent(VNRSchedulerNetwork):
             trajectory['masks'].append(mask.clone())
 
             # Update state
+            mask = mask.clone()
             mask[action] = False
             last_key = keys[action:action + 1]   # (1, gru_hidden)
 
@@ -152,6 +153,7 @@ class VNRSchedulerAgent(VNRSchedulerNetwork):
             values.append(self.critic(h_p, h_queue_mean))
 
             # Advance state
+            mask = mask.clone()
             mask[actions[t]] = False
             last_key = keys[actions[t]:actions[t] + 1]
 
