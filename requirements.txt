@@ -13,9 +13,9 @@ scipy>=1.11.0
 ortools>=9.8.0
 
 # ===== ML =====
-torch==2.2.2
-torchvision==0.17.2
-torchaudio==2.2.2
+torch==2.2.1
+torchvision==0.17.1
+torchaudio==2.2.1
 torchdata==0.7.1
 stable-baselines3>=2.3.0
 
