@@ -150,6 +150,35 @@ class EvaluationReport:
         )
 
 
+def create_depleted_substrate(substrate_fn, batch_fn, target_cpu_util: float = 0.5, hpso_params: dict = None) -> nx.Graph:
+    """
+    Artificially deplete a substrate by embedding random VNRs until a target
+    CPU utilisation is reached. Returns the depleted substrate.
+    """
+    _hpso = hpso_params or dict(particles=20, iterations=30)
+    substrate = substrate_fn()
+    from src.utils.graph_utils import substrate_utilisation
+    
+    while True:
+        util = substrate_utilisation(substrate)
+        if util['cpu_util'] >= target_cpu_util:
+            break
+            
+        vnr_list = batch_fn()
+        for vnr in vnr_list:
+            result = hpso_embed(substrate_graph=substrate, vnr_graph=vnr, **_hpso)
+            if result is not None:
+                mapping, link_paths = result
+                # Commit (hpso_embed already mutates the substrate)
+                pass
+            
+            util = substrate_utilisation(substrate)
+            if util['cpu_util'] >= target_cpu_util:
+                break
+    
+    return substrate
+
+
 def evaluate_scheduler(
     scheduler,
     substrate_fn: Callable,
@@ -157,6 +186,7 @@ def evaluate_scheduler(
     n_episodes:   int  = 100,
     hpso_params:  Optional[dict] = None,
     verbose:      bool = True,
+    depletion_target: float = 0.0,
 ) -> EvaluationReport:
     """
     Run n_episodes of both strategies (GNN-ordered and revenue-sort) and
@@ -164,12 +194,13 @@ def evaluate_scheduler(
 
     Parameters
     ----------
-    scheduler    : VNRScheduler (trained)
-    substrate_fn : callable() → fresh substrate graph per episode
-    batch_fn     : callable() → fresh VNR list per episode
-    n_episodes   : number of evaluation episodes
-    hpso_params  : override HPSO hyper-parameters
-    verbose      : print per-episode progress
+    scheduler        : VNRScheduler (trained)
+    substrate_fn     : callable() → fresh substrate graph per episode
+    batch_fn         : callable() → fresh VNR list per episode
+    n_episodes       : number of evaluation episodes
+    hpso_params      : override HPSO hyper-parameters
+    verbose          : print per-episode progress
+    depletion_target : float [0,1], if >0, artificially pre-fill substrate before evaluating
 
     Returns
     -------
@@ -183,7 +214,11 @@ def evaluate_scheduler(
     scheduler.eval()
 
     for ep in range(n_episodes):
-        substrate = substrate_fn()
+        if depletion_target > 0:
+            substrate = create_depleted_substrate(substrate_fn, batch_fn, depletion_target, _hpso)
+        else:
+            substrate = substrate_fn()
+            
         vnr_list  = batch_fn()
 
         # --- Scheduler ordering ---
@@ -240,6 +275,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hpso-iter",   type=int, default=30)
     p.add_argument("--device",      type=str, default="auto")
     p.add_argument("--no-ctx",      action="store_true")
+    p.add_argument("--depletion",   type=float, default=0.0, help="Pre-fill substrate CPU to this %%")
     return p
 
 
@@ -268,6 +304,8 @@ if __name__ == "__main__":
     print(f"[Evaluate] episodes    : {args.episodes}")
     print(f"[Evaluate] substrate   : {args.sub_nodes} nodes")
     print(f"[Evaluate] VNR batch   : {args.vnr_batch}")
+    if args.depletion > 0:
+        print(f"[Evaluate] Depletion : Pre-filled to {args.depletion:.0%}")
     print()
 
     report = evaluate_scheduler(
@@ -275,6 +313,7 @@ if __name__ == "__main__":
         substrate_fn,
         batch_fn,
         n_episodes  = args.episodes,
+        depletion_target = args.depletion,
         hpso_params = dict(particles=20, iterations=args.hpso_iter),
     )
     print(report.summary())

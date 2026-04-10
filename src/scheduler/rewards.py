@@ -43,7 +43,8 @@ class RewardMode(str, enum.Enum):
     SIMPLE   = "simple"
     REVENUE  = "revenue"
     LONGTERM = "longterm"
-
+    CONGESTION_AWARE = "congestion_aware"
+    REJECTION_SCALED = "rejection_scaled"
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -114,6 +115,33 @@ def _reward_longterm(
     return step_r
 
 
+def _reward_congestion_aware(
+    success: bool, vnr: nx.Graph, done: bool, accepted: list, rejected: list,
+    step_cost: Optional[float] = None, accepted_costs: Optional[List[float]] = None,
+    substrate_util: Optional[dict] = None
+) -> float:
+    """Scales R/C reward up when the substrate is congested."""
+    cpu_fill = substrate_util.get("cpu_util", 0.0) if substrate_util else 0.0
+    if success:
+        rc = _real_rc(vnr, step_cost)
+        return rc * (1.0 + cpu_fill)
+    else:
+        return -_revenue(vnr) * 0.2 * (1.0 + cpu_fill)
+
+
+def _reward_rejection_scaled(
+    success: bool, vnr: nx.Graph, done: bool, accepted: list, rejected: list,
+    step_cost: Optional[float] = None, accepted_costs: Optional[List[float]] = None,
+    substrate_util: Optional[dict] = None
+) -> float:
+    """Heavy rejection penalty proportional to substrate fill."""
+    cpu_fill = substrate_util.get("cpu_util", 0.0) if substrate_util else 0.0
+    if success:
+        return _real_rc(vnr, step_cost)
+    else:
+        return -_revenue(vnr) * (0.1 + 0.5 * cpu_fill)
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
@@ -122,6 +150,8 @@ _REWARD_FNS = {
     RewardMode.SIMPLE:   _reward_simple,
     RewardMode.REVENUE:  _reward_revenue,
     RewardMode.LONGTERM: _reward_longterm,
+    RewardMode.CONGESTION_AWARE: _reward_congestion_aware,
+    RewardMode.REJECTION_SCALED: _reward_rejection_scaled,
 }
 
 
