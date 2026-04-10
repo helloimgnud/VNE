@@ -135,13 +135,17 @@ class VNRScheduler(nn.Module):
             Scalar score per VNR (higher = higher priority).
         """
         if not vnr_data_list:
-            return torch.zeros(0)
+            device = next(self.parameters()).device
+            return torch.zeros(0, device=device)
+
+        device = next(self.parameters()).device
+        substrate_data = substrate_data.to(device)
 
         # --- Encode substrate (single graph → [1, 128]) ---
         h_s = self.substrate_encoder(substrate_data)   # [1, 128]
 
         # --- Encode all VNRs as a batch → [B, 64] ---
-        vnr_batch = Batch.from_data_list(vnr_data_list)
+        vnr_batch = Batch.from_data_list(vnr_data_list).to(device)
         h_vs = self.vnr_encoder(vnr_batch)              # [B, 64]
 
         B = h_vs.size(0)
