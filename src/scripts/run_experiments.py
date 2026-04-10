@@ -133,9 +133,9 @@ Examples:
     parser.add_argument(
         '--algorithms',
         nargs='+',
-        choices=['baseline', 'd_vine_sp', 'pso', 'hpso', 'mp-pva', 'proposed', 'proposed_KL'],
+        choices=['baseline', 'd_vine_sp', 'pso', 'hpso', 'mp-pva', 'proposed', 'proposed_KL', 'hpso_batch', 'hpso_batch_scheduler'],
         default=None,
-        help='Algorithms to test (default: baseline d_vine_sp pso hpso)'
+        help='Algorithms to test (default: hpso_batch_scheduler hpso_batch pso)'
     )
     
     parser.add_argument(

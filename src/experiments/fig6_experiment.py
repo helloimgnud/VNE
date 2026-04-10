@@ -70,7 +70,7 @@ class Fig6Experiment(BaseExperiment):
             List of result records
         """
         if algorithms is None:
-            algorithms = ['hpso_batch', 'pso', 'hpso']
+            algorithms = ['hpso_batch_scheduler', 'hpso_batch', 'pso', 'baseline']
         
         print(f"\n{'='*60}")
         print(f" Running {self.experiment_name} (run_id: {self.run_id})")

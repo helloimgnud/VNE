@@ -248,13 +248,36 @@ class BaseExperiment(ABC):
         from src.simulation.simulator import VNRSimulator, BatchedVNRSimulator
         # from src.integration.ordered_pipeline import build_ordered_pipeline
 
-        if algo_name in ['baseline', 'proposed', 'proposed_KL', 'batch_hpso', 'parallel_hpso_priority', 'hpso_batch']:
+        if algo_name in ['baseline', 'proposed', 'proposed_KL', 'batch_hpso', 'parallel_hpso_priority', 'hpso_batch', 'hpso_batch_scheduler']:
             simulator = BatchedVNRSimulator(
                 substrate, 
                 window_size=10, 
                 max_queue_delay=50
             )
-            batch_algo = self.get_algorithm_runner(algo_name)
+            
+            if algo_name == 'hpso_batch_scheduler':
+                from functools import partial
+                from src.scheduler import VNRScheduler
+                from src.algorithms.hpso_batch_scheduler import hpso_embed_batch_scheduled
+                import os
+                
+                # Check for either the step1024 or final checkpoint depending on existence
+                ckpt_final = "checkpoints/ppo_progressive_final.pt"
+                ckpt_step = "checkpoints/ppo_progressive_step1024.pt"
+                
+                ckpt_to_load = ckpt_final if os.path.exists(ckpt_final) else ckpt_step
+                
+                if os.path.exists(ckpt_to_load):
+                    print(f"   [RL] Loading agent checkpoint from: {ckpt_to_load}")
+                    scheduler = VNRScheduler.load(ckpt_to_load)
+                else:
+                    print(f"   [RL] Warning: Checkpoints {ckpt_final} not found! Falling back to heuristic.")
+                    scheduler = None
+                
+                batch_algo = partial(hpso_embed_batch_scheduled, scheduler=scheduler)
+            else:
+                batch_algo = self.get_algorithm_runner(algo_name)
+                
             # pipeline = build_ordered_pipeline(pretrained_path='checkpoint/final.pt', train=False)
             # metrics = simulator.simulate_batched_stream(vnr_stream, pipeline.process_batch)
             metrics = simulator.simulate_batched_stream(
