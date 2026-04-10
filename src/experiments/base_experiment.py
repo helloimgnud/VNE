@@ -223,7 +223,7 @@ class BaseExperiment(ABC):
         from src.algorithms.discrete_hpso import hpso_embed as discrete_hpso_embed
         from src.algorithms.hpso_priority import hpso_embed as hpso_priority_embed
         from src.algorithms.parallel_hpso_priority import embed_batch as parallel_hpso_priority_embed
-        from src.algorithms.hpso_batch import hpso_embed_batch
+        from src.algorithms.hpso_batch_rl import hpso_embed_batch
         algorithm_map = {
             'baseline': baseline_embed_batch,
             'd_vine_sp': d_vine_sp_embed,
