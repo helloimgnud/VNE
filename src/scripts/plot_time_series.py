@@ -16,7 +16,7 @@ def parse_args():
         "--metrics", 
         type=str, 
         nargs="+", 
-        default=["acceptance_ratio", "avg_cost", "avg_revenue", "window_accepted", "window_expired"],
+        default=["avg_revenue", "avg_cost", "acceptance_ratio"],
         help="Metrics to plot (can specify multiple, separated by spaces)"
     )
     parser.add_argument(
@@ -70,6 +70,14 @@ def main():
         else:
             print("Warning: '--vnodes' given but 'num_vnodes' column is absent in dataset.")
             
+    # Create composite column for hue mapping (e.g. hpso-4-4)
+    if 'num_vnodes' in df.columns and 'num_domains' in df.columns:
+        df['config_label'] = df['algorithm'].astype(str) + '-' + df['num_vnodes'].astype(str) + '-' + df['num_domains'].astype(str)
+    elif 'num_vnodes' in df.columns:
+        df['config_label'] = df['algorithm'].astype(str) + '-' + df['num_vnodes'].astype(str)
+    else:
+        df['config_label'] = df['algorithm']
+
     # Retain only requested metrics that actually exist in the dataframe
     available_metrics = [m for m in args.metrics if m in df.columns]
     if not available_metrics:
@@ -93,7 +101,7 @@ def main():
             data=df, 
             x=args.x_axis, 
             y=metric, 
-            hue="algorithm", 
+            hue="config_label", 
             marker="o",
             markersize=6,
             ax=ax,
@@ -108,7 +116,7 @@ def main():
         
         # Legend formatting
         handles, labels = ax.get_legend_handles_labels()
-        ax.legend(handles=handles, labels=labels, title="Algorithm")
+        ax.legend(handles=handles, labels=labels, title="Configuration (Algo-VNodes-Domains)")
         
     plt.tight_layout()
     
