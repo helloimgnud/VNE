@@ -70,6 +70,7 @@ class ProgressivePPOConfig:
     save_dir:   str = "checkpoints"
     run_name:   str = "ppo_progressive"
     device:     str = "auto"
+    resume_path: Optional[str] = None
 
 
 class _RolloutBuffer:
@@ -99,8 +100,14 @@ class ProgressiveTrainer:
 
         # Networks
         scheduler = VNRScheduler(use_batch_context=cfg.use_batch_context)
+        
+        if cfg.resume_path and os.path.exists(cfg.resume_path):
+            print(f"[PROGRESSIVE] Resuming from checkpoint: {cfg.resume_path}")
+            # Use VNRScheduler.load logic to get state_dict
+            ckpt = torch.load(cfg.resume_path, map_location="cpu")
+            scheduler.load_state_dict(ckpt["state_dict"])
+        
         self.ac   = GNNActorCritic(scheduler).to(self.device)
-
         self.optimizer = torch.optim.Adam(self.ac.parameters(), lr=cfg.lr)
 
         # Environment
@@ -347,8 +354,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--total-steps", type=int, default=1_000_000)
     parser.add_argument("--device", type=str, default="auto")
+    parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
     args = parser.parse_args()
     
-    cfg = ProgressivePPOConfig(total_timesteps=args.total_steps, device=args.device)
+    cfg = ProgressivePPOConfig(
+        total_timesteps = args.total_steps, 
+        device          = args.device,
+        resume_path     = args.resume
+    )
     trainer = ProgressiveTrainer(cfg)
     trainer.train()
