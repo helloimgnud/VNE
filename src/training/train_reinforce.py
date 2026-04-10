@@ -155,6 +155,10 @@ class ReinforceTrainer:
         # Logging
         os.makedirs(cfg.save_dir, exist_ok=True)
         self.history: List[dict] = []
+        
+        from torch.utils.tensorboard import SummaryWriter
+        tb_dir = os.path.join("runs", cfg.run_name)
+        self.writer = SummaryWriter(log_dir=tb_dir)
 
     # ------------------------------------------------------------------
 
@@ -236,17 +240,27 @@ class ReinforceTrainer:
                 total_rew  = sum(rewards),
                 acc_rate   = ep_info["acc_rate"],
                 rc_ratio   = ep_info["rc_ratio"],
+                cpu_util   = ep_info.get("cpu_util", 0.0),
+                bw_util    = ep_info.get("bw_util", 0.0),
             )
             self.history.append(log_entry)
+            
+            self.writer.add_scalar("Train/Loss", loss.item(), ep)
+            self.writer.add_scalar("Train/TotalReward", sum(rewards), ep)
+            self.writer.add_scalar("Metrics/AcceptanceRate", log_entry["acc_rate"], ep)
+            self.writer.add_scalar("Metrics/RevenueCostRatio", log_entry["rc_ratio"], ep)
+            self.writer.add_scalar("Metrics/SubstrateCpuUtil", log_entry["cpu_util"], ep)
+            self.writer.add_scalar("Metrics/SubstrateBwUtil", log_entry["bw_util"], ep)
 
             if ep % cfg.log_every == 0:
                 elapsed = time.time() - t0
                 print(
                     f"Ep {ep:5d}/{cfg.num_episodes} | "
                     f"loss={loss.item():+.4f} | "
-                    f"reward={sum(rewards):.3f} | "
+                    f"reward={sum(rewards):.2f} | "
                     f"AR={ep_info['acc_rate']:.2%} | "
                     f"R/C={ep_info['rc_ratio']:.3f} | "
+                    f"CPU={log_entry['cpu_util']:.1%} | "
                     f"t={elapsed:.0f}s"
                 )
 
@@ -259,6 +273,7 @@ class ReinforceTrainer:
         # Final save
         final_path = os.path.join(cfg.save_dir, f"{cfg.run_name}_final.pt")
         self.save(final_path)
+        self.writer.close()
         print(f"\n[REINFORCE] Training complete. Checkpoint: {final_path}")
 
     # ------------------------------------------------------------------

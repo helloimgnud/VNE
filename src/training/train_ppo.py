@@ -165,6 +165,10 @@ class PPOTrainerScheduler:
         os.makedirs(cfg.save_dir, exist_ok=True)
         self.buffer  = _RolloutBuffer()
         self.history: List[dict] = []
+        
+        from torch.utils.tensorboard import SummaryWriter
+        tb_dir = os.path.join("runs", cfg.run_name)
+        self.writer = SummaryWriter(log_dir=tb_dir)
 
         # Current episode state
         self._obs, _ = self.env.reset()
@@ -193,7 +197,7 @@ class PPOTrainerScheduler:
             with torch.no_grad():
                 action, log_prob, _, value = self.ac.get_action_and_value(obs_dev)
 
-            next_obs, reward, done, _, _ = self.env.step(action.item())
+            next_obs, reward, done, _, info = self.env.step(action.item())
 
             self.buffer.obs.append(obs)
             self.buffer.actions.append(action)
@@ -201,6 +205,15 @@ class PPOTrainerScheduler:
             self.buffer.values.append(value.squeeze())
             self.buffer.rewards.append(reward)
             self.buffer.dones.append(done)
+            
+            if done:
+                # Log metrics for completed episode
+                ep_info = self.env.episode_summary()
+                global_step = getattr(self, "global_step", 0) + len(self.buffer)
+                self.writer.add_scalar("Metrics/AcceptanceRate", ep_info["acc_rate"], global_step)
+                self.writer.add_scalar("Metrics/RevenueCostRatio", ep_info["rc_ratio"], global_step)
+                self.writer.add_scalar("Metrics/SubstrateCpuUtil", ep_info.get("cpu_util", 0.0), global_step)
+                self.writer.add_scalar("Metrics/SubstrateBwUtil", ep_info.get("bw_util", 0.0), global_step)
 
             if done:
                 self._obs, _ = self.env.reset()
@@ -349,42 +362,47 @@ class PPOTrainerScheduler:
         print()
 
         t0           = time.time()
-        global_step  = 0
+        self.global_step  = 0
         update_count = 0
 
-        while global_step < cfg.total_timesteps:
+        while self.global_step < cfg.total_timesteps:
             self._collect_rollout(cfg.n_steps)
-            global_step += len(self.buffer)
+            self.global_step += len(self.buffer)
 
             advantages, returns = self._compute_gae(self._obs)
             update_stats        = self._update(advantages, returns)
             update_count       += 1
 
             entry = dict(
-                step         = global_step,
+                step         = self.global_step,
                 update       = update_count,
                 **update_stats,
             )
             self.history.append(entry)
+            
+            self.writer.add_scalar("Train/PolicyLoss", update_stats["policy_loss"], self.global_step)
+            self.writer.add_scalar("Train/ValueLoss", update_stats["value_loss"], self.global_step)
+            self.writer.add_scalar("Train/Entropy", update_stats["entropy"], self.global_step)
 
-            if global_step % cfg.log_every < cfg.n_steps:
+            if self.global_step % cfg.log_every < cfg.n_steps:
                 elapsed = time.time() - t0
                 print(
-                    f"Step {global_step:8d}/{cfg.total_timesteps} | "
+                    f"Step {self.global_step:8d}/{cfg.total_timesteps} | "
                     f"π_loss={update_stats['policy_loss']:+.4f} | "
                     f"v_loss={update_stats['value_loss']:.4f} | "
                     f"entropy={update_stats['entropy']:.3f} | "
                     f"t={elapsed:.0f}s"
                 )
 
-            if global_step % cfg.save_every < cfg.n_steps:
+            if self.global_step % cfg.save_every < cfg.n_steps:
                 ckpt = os.path.join(
-                    cfg.save_dir, f"{cfg.run_name}_step{global_step}.pt"
+                    cfg.save_dir, f"{cfg.run_name}_step{self.global_step}.pt"
                 )
                 self.save(ckpt)
 
         final = os.path.join(cfg.save_dir, f"{cfg.run_name}_final.pt")
         self.save(final)
+        self.writer.close()
         print(f"\n[PPO] Training complete. Checkpoint: {final}")
 
     # ------------------------------------------------------------------

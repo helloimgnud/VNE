@@ -138,7 +138,9 @@ class VNEOrderingEnv(gymnasium.Env):
         self.remaining  = list(range(len(self.vnr_list)))
         self.accepted   = []
         self.rejected   = []
+        self.accepted_costs = []  # track real costs
         self.last_success = False
+        self.last_step_cost = None
 
         return self._get_obs(), {}
 
@@ -175,12 +177,21 @@ class VNEOrderingEnv(gymnasium.Env):
             mapping, link_paths = result
             self.accepted.append((vnr, mapping, link_paths))
             self.last_success = True
+            
+            from src.evaluation.eval import cost_of_embedding
+            cost = cost_of_embedding(mapping, link_paths, vnr, self.substrate)
+            self.accepted_costs.append(cost)
+            self.last_step_cost = cost
         else:
             self.rejected.append(vnr)
             self.last_success = False
+            self.last_step_cost = None
 
         self.remaining.pop(action)
         done = (len(self.remaining) == 0)
+        
+        from src.utils.graph_utils import substrate_utilisation
+        sub_util = substrate_utilisation(self.substrate)
 
         reward = compute_reward(
             mode     = self.reward_mode,
@@ -189,6 +200,9 @@ class VNEOrderingEnv(gymnasium.Env):
             done     = done,
             accepted = self.accepted,
             rejected = self.rejected,
+            step_cost=self.last_step_cost,
+            accepted_costs=self.accepted_costs,
+            substrate_util=sub_util,
         )
 
         obs  = self._get_obs()
@@ -196,6 +210,7 @@ class VNEOrderingEnv(gymnasium.Env):
             "accepted":  len(self.accepted),
             "rejected":  len(self.rejected),
             "n_remaining": len(self.remaining),
+            "substrate_util": sub_util,
         }
         return obs, reward, done, False, info
 
@@ -227,10 +242,13 @@ class VNEOrderingEnv(gymnasium.Env):
         n_total = len(self.accepted) + len(self.rejected)
         ar  = len(self.accepted) / (n_total + 1e-9)
 
-        from src.evaluation.eval import revenue_of_vnr, cost_of_vnr
+        from src.evaluation.eval import revenue_of_vnr
         total_rev  = sum(revenue_of_vnr(v) for v, _, _ in self.accepted)
-        total_cost = sum(cost_of_vnr(v)    for v, _, _ in self.accepted)
-        rc  = total_rev / (total_cost + 1e-6)
+        total_cost = sum(self.accepted_costs) if self.accepted_costs else 1e-6
+        rc  = total_rev / total_cost
+
+        from src.utils.graph_utils import substrate_utilisation
+        u = substrate_utilisation(self.substrate)
 
         return dict(
             n_total    = n_total,
@@ -240,4 +258,6 @@ class VNEOrderingEnv(gymnasium.Env):
             total_rev  = total_rev,
             total_cost = total_cost,
             rc_ratio   = rc,
+            cpu_util   = u['cpu_util'],
+            bw_util    = u['bw_util'],
         )
