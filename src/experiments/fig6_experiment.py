@@ -36,6 +36,11 @@ class Fig6Experiment(BaseExperiment):
             f"results_{self.experiment_name}_{self.run_id}.csv"
         )
         
+        self.time_series_file = os.path.join(
+            self.results_dir, 
+            f"time_series_{self.experiment_name}_{self.run_id}.csv"
+        )
+        
         self.plot_file = os.path.join(
             self.results_dir, 
             f"{self.experiment_name}_{self.run_id}.png"
@@ -73,6 +78,7 @@ class Fig6Experiment(BaseExperiment):
         print(f"{'='*60}")
         
         all_records = []
+        all_time_series_records = []
         
         # Check if using new replica format or legacy format
         if self.replicas:
@@ -111,6 +117,15 @@ class Fig6Experiment(BaseExperiment):
                         for run_idx in range(num_runs):
                             metrics = self._run_algorithm(substrate, vnr_stream, algo_name)
                             
+                            time_series = metrics.pop('time_series', [])
+                            for ts in time_series:
+                                ts['replica_id'] = replica_id
+                                ts['eval_run'] = run_idx
+                                ts['algorithm'] = algo_name
+                                ts['num_vnodes'] = num_vnodes
+                                ts['num_domains'] = self.domain_fixed
+                                all_time_series_records.append(ts)
+                                
                             record = {
                                 'replica_id': replica_id,
                                 'eval_run': run_idx,
@@ -150,6 +165,15 @@ class Fig6Experiment(BaseExperiment):
                     for run_idx in range(num_runs):
                         metrics = self._run_algorithm(substrate, vnr_stream, algo_name)
                         
+                        time_series = metrics.pop('time_series', [])
+                        for ts in time_series:
+                            ts['replica_id'] = 0
+                            ts['eval_run'] = run_idx
+                            ts['algorithm'] = algo_name
+                            ts['num_vnodes'] = num_vnodes
+                            ts['num_domains'] = self.domain_fixed
+                            all_time_series_records.append(ts)
+                            
                         record = {
                             'replica_id': 0,
                             'eval_run': run_idx,
@@ -174,9 +198,21 @@ class Fig6Experiment(BaseExperiment):
         # Save results
         self.save_results(all_records)
         
+        if all_time_series_records:
+            import pandas as pd
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            for ts in all_time_series_records:
+                ts['run_id'] = self.run_id
+                ts['experiment_name'] = self.experiment_name
+                ts['timestamp'] = timestamp
+            ts_df = pd.DataFrame(all_time_series_records)
+            ts_df.to_csv(self.time_series_file, index=False)
+            print(f"✓ Saved time series metrics to {self.time_series_file}")
+        
         print(f"\n{'='*60}")
         print(f" Experiment completed!")
         print(f" Total records: {len(all_records)}")
+        print(f" Total time series records: {len(all_time_series_records)}")
         print(f"{'='*60}\n")
         
         return all_records

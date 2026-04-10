@@ -65,8 +65,8 @@ class ProgressivePPOConfig:
     hpso_iterations:  int   = 30
 
     # Logging / checkpointing
-    log_every:  int = 10_000      # log every N timesteps
-    save_every: int = 50_000
+    log_every:  int = 100      # log every N timesteps
+    save_every: int = 1000
     save_dir:   str = "checkpoints"
     run_name:   str = "ppo_progressive"
     device:     str = "auto"

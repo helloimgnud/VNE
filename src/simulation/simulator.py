@@ -247,6 +247,11 @@ class BatchedVNRSimulator(VNRSimulator):
             max_queue_delay=self.max_queue_delay
         )
         
+        time_series_data = []
+        processed_vnrs = 0
+        window_idx = 0
+        window_expired_sum = 0
+        
         for vnr in vnr_stream:
             arrival_time = vnr.graph.get('arrival_time', self.current_time)
             
@@ -259,6 +264,8 @@ class BatchedVNRSimulator(VNRSimulator):
             expired_count = batcher.remove_expired_requests(self.current_time)
             if expired_count > 0:
                 self.expired_in_queue += expired_count
+                processed_vnrs += expired_count
+                window_expired_sum += expired_count
                 if verbose:
                     print(f"   [t={self.current_time}] Removed {expired_count} "
                           f"expired VNR(s) from queue")
@@ -268,22 +275,50 @@ class BatchedVNRSimulator(VNRSimulator):
             
             # Process batch if window is complete
             if should_process:
-                self._process_batch(batcher, batch_algorithm, verbose)
+                accepted_count, rejected_count = self._process_batch(batcher, batch_algorithm, verbose)
+                processed_vnrs += (accepted_count + rejected_count)
+                
+                window_metrics = self.get_metrics(processed_vnrs)
+                window_metrics['time'] = self.current_time
+                window_metrics['window_idx'] = window_idx
+                window_metrics['expired_in_queue'] = self.expired_in_queue
+                window_metrics['window_accepted'] = accepted_count
+                window_metrics['window_rejected'] = rejected_count
+                window_metrics['window_expired'] = window_expired_sum
+                
+                time_series_data.append(window_metrics)
+                
+                window_idx += 1
+                window_expired_sum = 0
         
         # Process any remaining VNRs in queue
         if batcher.has_pending_requests():
             expired_count = batcher.remove_expired_requests(self.current_time)
             if expired_count > 0:
                 self.expired_in_queue += expired_count
+                processed_vnrs += expired_count
+                window_expired_sum += expired_count
                 if verbose:
                     print(f"   [t={self.current_time}] Removed {expired_count} "
                           f"expired VNR(s) from final queue")
             
             batch = batcher.get_pending_batch(self.current_time)
+            accepted_count, rejected_count = 0, 0
             if batch:
                 if verbose:
                     print(f"   [t={self.current_time}] Processing final batch of {len(batch)} VNRs")
-                self._embed_batch(batch, batch_algorithm, verbose)
+                accepted_count, rejected_count = self._embed_batch(batch, batch_algorithm, verbose)
+                processed_vnrs += (accepted_count + rejected_count)
+                
+            window_metrics = self.get_metrics(processed_vnrs)
+            window_metrics['time'] = self.current_time
+            window_metrics['window_idx'] = window_idx
+            window_metrics['expired_in_queue'] = self.expired_in_queue
+            window_metrics['window_accepted'] = accepted_count
+            window_metrics['window_rejected'] = rejected_count
+            window_metrics['window_expired'] = window_expired_sum
+            
+            time_series_data.append(window_metrics)
         
         # Release all remaining active VNRs
         while self.active_vnrs:
@@ -296,6 +331,7 @@ class BatchedVNRSimulator(VNRSimulator):
         metrics['rejected_by_algorithm'] = (len(vnr_stream) - 
                                            self.success_count - 
                                            self.expired_in_queue)
+        metrics['time_series'] = time_series_data
         
         return metrics
     
@@ -306,12 +342,12 @@ class BatchedVNRSimulator(VNRSimulator):
         if not batch:
             if verbose:
                 print(f"   [t={self.current_time}] Batch empty after filtering")
-            return
+            return 0, 0
         
         if verbose:
             print(f"   [t={self.current_time}] Processing batch of {len(batch)} VNRs")
         
-        self._embed_batch(batch, batch_algorithm, verbose)
+        return self._embed_batch(batch, batch_algorithm, verbose)
     
     def _embed_batch(self, batch, batch_algorithm, verbose):
         """Embed a batch of VNRs using batch algorithm."""
@@ -343,3 +379,5 @@ class BatchedVNRSimulator(VNRSimulator):
         # Log rejected VNRs
         if verbose and rejected:
             print(f"      {len(rejected)} VNRs rejected")
+            
+        return len(accepted), len(rejected)
