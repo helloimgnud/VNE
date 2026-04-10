@@ -16,8 +16,8 @@ def parse_args():
         "--metrics", 
         type=str, 
         nargs="+", 
-        default=["avg_revenue", "avg_cost", "acceptance_ratio"],
-        help="Metrics to plot (can specify multiple, separated by spaces)"
+        default=["acceptance_ratio", "avg_cost", "avg_revenue"],
+        help="Metrics to plot (defaults to Acceptance Rate, Cost, and Revenue)"
     )
     parser.add_argument(
         "--vnodes", 
@@ -70,53 +70,63 @@ def main():
         else:
             print("Warning: '--vnodes' given but 'num_vnodes' column is absent in dataset.")
             
-    # Create composite column for hue mapping (e.g. hpso-4-4)
-    if 'num_vnodes' in df.columns and 'num_domains' in df.columns:
-        df['config_label'] = df['algorithm'].astype(str) + '-' + df['num_vnodes'].astype(str) + '-' + df['num_domains'].astype(str)
-    elif 'num_vnodes' in df.columns:
-        df['config_label'] = df['algorithm'].astype(str) + '-' + df['num_vnodes'].astype(str)
-    else:
-        df['config_label'] = df['algorithm']
+    # Set default metrics and their display names
+    metric_display_names = {
+        "acceptance_ratio": "Acceptance Rate",
+        "avg_cost": "Cost",
+        "avg_revenue": "Revenue"
+    }
+    
+    # If using defaults, ensure we have the requested three
+    if args.metrics == ["avg_revenue", "avg_cost", "acceptance_ratio"]:
+        args.metrics = ["acceptance_ratio", "avg_cost", "avg_revenue"]
+
+    # Calculate average of all records for the same key (algorithm, vnodes, domains, time point)
+    print(f"Averaging records grouped by algorithm/vnodes/domains and '{args.x_axis}'...")
+    
+    # We group by these columns to ensure they are preserved in the averaged dataframe
+    group_cols = ['algorithm', 'num_vnodes', 'num_domains', args.x_axis]
+    df_avg = df.groupby(group_cols).mean(numeric_only=True).reset_index()
 
     # Retain only requested metrics that actually exist in the dataframe
-    available_metrics = [m for m in args.metrics if m in df.columns]
+    available_metrics = [m for m in args.metrics if m in df_avg.columns]
     if not available_metrics:
         print(f"Error: None of the requested metrics ({args.metrics}) were found in the CSV.")
         return
         
     num_metrics = len(available_metrics)
     # Give a dynamic height depending on how many metrics we want to plot simultaneously
-    fig, axes = plt.subplots(num_metrics, 1, figsize=(12, 4 * num_metrics), sharex=True)
+    fig, axes = plt.subplots(num_metrics, 1, figsize=(13, 5 * num_metrics), sharex=True)
     if num_metrics == 1:
         axes = [axes]
         
     # Set beautiful aesthetics
     sns.set_theme(style="whitegrid")
     
-    # Since there are multiple runs/replicas, Seaborn's lineplot will automatically 
-    # group by the x_axis + hue (algorithm), calculate the mean, and draw 95% Confidence Intervals
+    # Map algorithm to colors and vnodes to line styles/markers
     for ax, metric in zip(axes, available_metrics):
-        print(f"Plotting {metric} over time...")
+        display_name = metric_display_names.get(metric, metric.replace("_", " ").title())
+        print(f"Plotting averaged {metric} ({display_name}) over time...")
+        
         sns.lineplot(
-            data=df, 
+            data=df_avg, 
             x=args.x_axis, 
             y=metric, 
-            hue="config_label", 
-            marker="o",
-            markersize=6,
-            ax=ax,
-            err_style="band",   # draws the confidence band combining runs
-            errorbar=("ci", 95) # 95% confidence interval
+            hue="algorithm", 
+            style="num_vnodes",
+            markers=True,      # Use different markers for different vnode configs
+            dashes=True,       # Also use different line styles (solid, dashed, etc.)
+            markersize=8,
+            linewidth=2.5,
+            ax=ax
         )
         
-        filter_str = f"num_vnodes={args.vnodes}" if args.vnodes else "All configurations"
-        ax.set_title(f"Simulation Progression of '{metric}' [{filter_str}]", fontsize=12, fontweight="bold")
-        ax.set_ylabel(metric.replace("_", " ").title(), fontsize=11)
-        ax.set_xlabel(args.x_axis.replace("_", " ").title(), fontsize=11)
+        ax.set_title(f"Simulation Progression of {display_name}", fontsize=16, fontweight="bold")
+        ax.set_ylabel(display_name, fontsize=13)
+        ax.set_xlabel(args.x_axis.replace("_", " ").title(), fontsize=13)
         
-        # Legend formatting
-        handles, labels = ax.get_legend_handles_labels()
-        ax.legend(handles=handles, labels=labels, title="Configuration (Algo-VNodes-Domains)")
+        # Legend formatting - move legend to the side to avoid overlapping lines
+        ax.legend(title="Algorithm | VNodes", loc='upper left', bbox_to_anchor=(1, 1), fontsize=9)
         
     plt.tight_layout()
     
@@ -124,7 +134,7 @@ def main():
     if args.save_path:
         os.makedirs(os.path.dirname(os.path.abspath(args.save_path)), exist_ok=True)
         plt.savefig(args.save_path, dpi=args.dpi, bbox_inches="tight")
-        print(f"\n✓ Saved plot to {args.save_path}")
+        print(f"\nSaved plot to {args.save_path}")
     else:
         # Save near the source CSV file by default
         base_name = args.csv_file.replace('.csv', '')
@@ -132,7 +142,7 @@ def main():
         default_save = f"{base_name}_plotted_{args.x_axis}{vnode_suffix}.png"
         
         plt.savefig(default_save, dpi=args.dpi, bbox_inches="tight")
-        print(f"\n✓ Saved plotted sequence to {default_save}")
+        print(f"\nSaved plotted sequence to {default_save}")
         
     try:
         # Attempt to show plot if running in an interactive session
