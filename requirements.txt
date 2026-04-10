@@ -21,6 +21,10 @@ stable-baselines3>=2.3.0
 
 # ===== Graph =====
 dgl==2.1.0
+torch-geometric>=2.5.0
+
+# ===== RL =====
+gymnasium>=0.29.0
 
 # ===== Utils =====
 tqdm>=4.65.0
