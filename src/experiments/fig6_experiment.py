@@ -49,162 +49,113 @@ class Fig6Experiment(BaseExperiment):
         
         # Extract experiment parameters from metadata
         self.vnode_range = self.metadata.get('vnode_range', [2, 4, 6, 8])
+        self.vnr_min_nodes = self.metadata.get('vnr_min_nodes', min(self.vnode_range))
+        self.vnr_max_nodes = self.metadata.get('vnr_max_nodes', max(self.vnode_range))
         self.domain_fixed = self.metadata.get('num_domains', 4)
         self.num_replicas = self.metadata.get('num_replicas', 1)
         self.replicas = self.metadata.get('replicas', [])
-        
+
         print(f" Fig6 Experiment Configuration:")
-        print(f"   • Virtual nodes: {self.vnode_range}")
+        print(f"   • VNR node range: [{self.vnr_min_nodes}, {self.vnr_max_nodes}]")
         print(f"   • Fixed domains: {self.domain_fixed}")
         print(f"   • Replicas: {self.num_replicas}")
     
     def run(self, algorithms=None, num_runs=3, verbose=True):
         """
-        Run experiment for all vnode configurations across all replicas.
-        
+        Run experiment for all replicas.
+
+        Each replica uses a **single mixed-range VNR stream** (node counts drawn
+        uniformly from ``[vnr_min_nodes, vnr_max_nodes]``) so there is no longer
+        a separate inner loop over fixed vnode counts.
+
         Args:
             algorithms: List of algorithm names to test
             num_runs: Number of runs per dataset to average heuristics
             verbose: If True, print detailed progress
-            
+
         Returns:
             List of result records
         """
         if algorithms is None:
             algorithms = ['hpso_batch_scheduler', 'hpso_batch', 'pso', 'baseline']
-        
+
         print(f"\n{'='*60}")
         print(f" Running {self.experiment_name} (run_id: {self.run_id})")
         print(f" Replicas: {self.num_replicas}")
         print(f"{'='*60}")
-        
+
         all_records = []
-        
+
         # Check if using new replica format or legacy format
         if self.replicas:
-            # New format with replicas
+            # New single-stream-per-replica format
             for replica_info in self.replicas:
                 replica_id = replica_info['replica_id']
-                
+
                 print(f"\n{'='*60}")
                 print(f" REPLICA {replica_id + 1}/{self.num_replicas}")
                 print(f"   Substrate nodes: {replica_info.get('substrate_nodes', 'N/A')}")
                 print(f"   Num VNRs: {replica_info.get('num_vnrs', 'N/A')}")
                 print(f"{'='*60}")
-                
+
                 # Load substrate for this replica
                 substrate = load_substrate_from_json(replica_info['substrate_path'])
-                vnr_configs = replica_info['vnr_configs']
-                
-                # Test each vnode configuration
-                for num_vnodes in self.vnode_range:
-                    print(f"\n{'-'*60}")
-                    print(f" Testing with {num_vnodes} virtual nodes")
-                    print(f"{'-'*60}")
-                    
-                    vnr_path = vnr_configs.get(f"{num_vnodes}nodes")
-                    if not vnr_path or not os.path.exists(vnr_path):
-                        print(f"   WARNING: VNR stream not found for {num_vnodes} nodes")
-                        continue
-                    
-                    vnr_stream = load_vnr_stream_from_json(vnr_path)
-                    
-                    # Test each algorithm
-                    for algo_name in algorithms:
-                        print(f"\n Running {algo_name} ({num_runs} runs)...")
-                        
-                        algo_metrics = []
-                        for run_idx in range(num_runs):
-                            metrics = self._run_algorithm(substrate, vnr_stream, algo_name)
-                            
-                            time_series = metrics.pop('time_series', [])
-                            if time_series:
-                                ts_chunk = []
-                                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                for ts in time_series:
-                                    ts['replica_id'] = replica_id
-                                    ts['eval_run'] = run_idx
-                                    ts['algorithm'] = algo_name
-                                    ts['num_vnodes'] = num_vnodes
-                                    ts['num_domains'] = self.domain_fixed
-                                    ts['run_id'] = self.run_id
-                                    ts['experiment_name'] = self.experiment_name
-                                    ts['timestamp'] = timestamp
-                                    ts_chunk.append(ts)
-                                
-                                import pandas as pd
-                                file_exists = os.path.isfile(self.time_series_file)
-                                pd.DataFrame(ts_chunk).to_csv(self.time_series_file, mode='a', header=not file_exists, index=False)
-                                
-                            record = {
-                                'replica_id': replica_id,
-                                'eval_run': run_idx,
-                                'algorithm': algo_name,
-                                'num_vnodes': num_vnodes,
-                                'num_domains': self.domain_fixed,
-                                **metrics
-                            }
-                            all_records.append(record)
-                            algo_metrics.append(metrics)
-                            
-                        if verbose:
-                            acc_mean = np.mean([m['acceptance_ratio'] for m in algo_metrics])
-                            cost_mean = np.mean([m['avg_cost'] for m in algo_metrics])
-                            rev_mean = np.mean([m['avg_revenue'] for m in algo_metrics])
-                            time_mean = np.mean([m['avg_execution_time'] for m in algo_metrics])
-                            print(f"   ✓ Mean Acceptance Ratio: {acc_mean:.2%}")
-                            print(f"   ✓ Mean Cost: {cost_mean:.2f}")
-                            print(f"   ✓ Mean Revenue: {rev_mean:.2f}")
-                            print(f"   ✓ Mean Time: {time_mean:.4f}s")
-        else:
-            # Legacy format (single dataset, no replicas)
-            substrate = self.load_substrate()
-            
-            for num_vnodes in self.vnode_range:
-                print(f"\n{'-'*60}")
-                print(f" Testing with {num_vnodes} virtual nodes")
-                print(f"{'-'*60}")
-                
-                vnr_path = os.path.join(self.dataset_dir, f"vnr_{num_vnodes}nodes.json")
-                vnr_stream = self.load_vnr_stream(vnr_path)
-                
+
+                # Resolve VNR stream path — new format uses 'vnr_path' directly
+                vnr_path = replica_info.get('vnr_path')
+                if vnr_path is None:
+                    # Legacy format: pick the first available per-count file
+                    vnr_configs = replica_info.get('vnr_configs', {})
+                    if vnr_configs:
+                        vnr_path = next(iter(vnr_configs.values()))
+
+                if not vnr_path or not os.path.exists(vnr_path):
+                    print(f"   WARNING: VNR stream not found for replica {replica_id}")
+                    continue
+
+                vnr_stream = load_vnr_stream_from_json(vnr_path)
+                print(f"   VNR stream: {vnr_path} ({len(vnr_stream)} VNRs)")
+
+                # Test each algorithm
                 for algo_name in algorithms:
                     print(f"\n Running {algo_name} ({num_runs} runs)...")
-                    
+
                     algo_metrics = []
                     for run_idx in range(num_runs):
                         metrics = self._run_algorithm(substrate, vnr_stream, algo_name)
-                        
+
                         time_series = metrics.pop('time_series', [])
                         if time_series:
                             ts_chunk = []
                             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             for ts in time_series:
-                                ts['replica_id'] = 0
+                                ts['replica_id'] = replica_id
                                 ts['eval_run'] = run_idx
                                 ts['algorithm'] = algo_name
-                                ts['num_vnodes'] = num_vnodes
+                                ts['vnr_min_nodes'] = self.vnr_min_nodes
+                                ts['vnr_max_nodes'] = self.vnr_max_nodes
                                 ts['num_domains'] = self.domain_fixed
                                 ts['run_id'] = self.run_id
                                 ts['experiment_name'] = self.experiment_name
                                 ts['timestamp'] = timestamp
                                 ts_chunk.append(ts)
-                            
+
                             import pandas as pd
                             file_exists = os.path.isfile(self.time_series_file)
                             pd.DataFrame(ts_chunk).to_csv(self.time_series_file, mode='a', header=not file_exists, index=False)
-                            
+
                         record = {
-                            'replica_id': 0,
+                            'replica_id': replica_id,
                             'eval_run': run_idx,
                             'algorithm': algo_name,
-                            'num_vnodes': num_vnodes,
+                            'vnr_min_nodes': self.vnr_min_nodes,
+                            'vnr_max_nodes': self.vnr_max_nodes,
                             'num_domains': self.domain_fixed,
                             **metrics
                         }
                         all_records.append(record)
                         algo_metrics.append(metrics)
-                        
+
                     if verbose:
                         acc_mean = np.mean([m['acceptance_ratio'] for m in algo_metrics])
                         cost_mean = np.mean([m['avg_cost'] for m in algo_metrics])
@@ -214,16 +165,70 @@ class Fig6Experiment(BaseExperiment):
                         print(f"   ✓ Mean Cost: {cost_mean:.2f}")
                         print(f"   ✓ Mean Revenue: {rev_mean:.2f}")
                         print(f"   ✓ Mean Time: {time_mean:.4f}s")
-        
+        else:
+            # Legacy format (single dataset, no replicas)
+            substrate = self.load_substrate()
+            vnr_path = self.metadata.get('vnr_path') or os.path.join(self.dataset_dir, "vnr_stream.json")
+            vnr_stream = self.load_vnr_stream(vnr_path)
+
+            for algo_name in algorithms:
+                print(f"\n Running {algo_name} ({num_runs} runs)...")
+
+                algo_metrics = []
+                for run_idx in range(num_runs):
+                    metrics = self._run_algorithm(substrate, vnr_stream, algo_name)
+
+                    time_series = metrics.pop('time_series', [])
+                    if time_series:
+                        ts_chunk = []
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        for ts in time_series:
+                            ts['replica_id'] = 0
+                            ts['eval_run'] = run_idx
+                            ts['algorithm'] = algo_name
+                            ts['vnr_min_nodes'] = self.vnr_min_nodes
+                            ts['vnr_max_nodes'] = self.vnr_max_nodes
+                            ts['num_domains'] = self.domain_fixed
+                            ts['run_id'] = self.run_id
+                            ts['experiment_name'] = self.experiment_name
+                            ts['timestamp'] = timestamp
+                            ts_chunk.append(ts)
+
+                        import pandas as pd
+                        file_exists = os.path.isfile(self.time_series_file)
+                        pd.DataFrame(ts_chunk).to_csv(self.time_series_file, mode='a', header=not file_exists, index=False)
+
+                    record = {
+                        'replica_id': 0,
+                        'eval_run': run_idx,
+                        'algorithm': algo_name,
+                        'vnr_min_nodes': self.vnr_min_nodes,
+                        'vnr_max_nodes': self.vnr_max_nodes,
+                        'num_domains': self.domain_fixed,
+                        **metrics
+                    }
+                    all_records.append(record)
+                    algo_metrics.append(metrics)
+
+                if verbose:
+                    acc_mean = np.mean([m['acceptance_ratio'] for m in algo_metrics])
+                    cost_mean = np.mean([m['avg_cost'] for m in algo_metrics])
+                    rev_mean = np.mean([m['avg_revenue'] for m in algo_metrics])
+                    time_mean = np.mean([m['avg_execution_time'] for m in algo_metrics])
+                    print(f"   ✓ Mean Acceptance Ratio: {acc_mean:.2%}")
+                    print(f"   ✓ Mean Cost: {cost_mean:.2f}")
+                    print(f"   ✓ Mean Revenue: {rev_mean:.2f}")
+                    print(f"   ✓ Mean Time: {time_mean:.4f}s")
+
         # Save results
         self.save_results(all_records)
-        
+
         print(f"\n{'='*60}")
         print(f" Experiment completed!")
         print(f" Total records: {len(all_records)}")
         print(f" Time series incrementally saved to {self.time_series_file}")
         print(f"{'='*60}\n")
-        
+
         return all_records
     
     def plot(self, run_id=None, compare_runs=False):

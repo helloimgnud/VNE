@@ -60,7 +60,10 @@ class ProgressivePPOConfig:
     # Environment default base bounds
     substrate_nodes:  int   = 50
     batch_size_env:   int   = 10
-    vnr_nodes:        int   = 4
+    # VNR size range: each VNR in a batch independently samples its node count
+    # uniformly from [vnr_min_nodes, vnr_max_nodes], giving a varied dataset.
+    vnr_min_nodes:    int   = 2
+    vnr_max_nodes:    int   = 8
     hpso_particles:   int   = 20
     hpso_iterations:  int   = 30
 
@@ -114,7 +117,8 @@ class ProgressiveTrainer:
         substrate_fn, batch_fn = make_env_fns(
             substrate_nodes = cfg.substrate_nodes,
             batch_size      = cfg.batch_size_env,
-            vnr_nodes       = cfg.vnr_nodes,
+            vnr_min_nodes   = cfg.vnr_min_nodes,
+            vnr_max_nodes   = cfg.vnr_max_nodes,
         )
         base_env = VNEOrderingEnv(
             substrate_fn = substrate_fn,
@@ -355,12 +359,19 @@ if __name__ == "__main__":
     parser.add_argument("--total-steps", type=int, default=1_000_000)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
+    # VNR size range
+    parser.add_argument("--vnr-min-nodes", type=int, default=2,
+                        help="Minimum virtual nodes per VNR (inclusive)")
+    parser.add_argument("--vnr-max-nodes", type=int, default=8,
+                        help="Maximum virtual nodes per VNR (inclusive)")
     args = parser.parse_args()
-    
+
     cfg = ProgressivePPOConfig(
-        total_timesteps = args.total_steps, 
+        total_timesteps = args.total_steps,
         device          = args.device,
-        resume_path     = args.resume
+        resume_path     = args.resume,
+        vnr_min_nodes   = args.vnr_min_nodes,
+        vnr_max_nodes   = args.vnr_max_nodes,
     )
     trainer = ProgressiveTrainer(cfg)
     trainer.train()

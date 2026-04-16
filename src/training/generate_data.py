@@ -4,11 +4,19 @@ src/training/generate_data.py
 Data-generation factory functions for the VNR ordering scheduler training.
 
 These are thin wrappers around the existing generators in
-``src/generators/substrate_generator.py`` and
-``src/generators/vnr_generator.py``.
+``src/generators_v2/substrate_generator.py`` and
+``src/generators_v2/vnr_generator.py``.
 
 They return **callables** (closures) suitable for use as ``substrate_fn``
 and ``batch_fn`` parameters to ``VNEOrderingEnv.__init__``.
+
+Key change (variable VNR sizes)
+--------------------------------
+``make_batch_fn`` now accepts ``min_vnodes`` / ``max_vnodes`` instead of a
+single ``num_nodes``.  Each call samples a *different* node-count for every
+VNR in the batch, drawn uniformly from [min_vnodes, max_vnodes].  This means
+a single dataset naturally contains VNRs of varying size, which improves
+agent generalisation.
 
 Functions
 ---------
@@ -87,8 +95,8 @@ def make_substrate_fn(
 
 def make_batch_fn(
     batch_size:   int   = 10,
-    num_nodes:    int   = 4,          # mean VNR size; actual size sampled ± 2
-    variable_size: bool = True,
+    min_vnodes:   int   = 2,          # minimum VNR node count per request
+    max_vnodes:   int   = 8,          # maximum VNR node count per request
     edge_prob:    float = 0.5,
     cpu_range:    Tuple = (5, 30),
     bw_range:     Tuple = (5, 50),
@@ -97,31 +105,36 @@ def make_batch_fn(
     """
     Return a zero-argument callable that generates a batch of VNR graphs.
 
+    Each VNR in the batch independently samples its node count from
+    ``[min_vnodes, max_vnodes]``, so a single batch (and therefore a single
+    dataset) contains VNRs of **varied sizes**.
+
     Parameters
     ----------
-    batch_size    : number of VNRs per batch
-    num_nodes     : base number of virtual nodes per VNR
-    variable_size : if True, VNR size is sampled uniformly in
-                    [max(2, num_nodes-2), num_nodes+2]
-    edge_prob     : Erdős–Rényi edge probability
-    cpu_range     : (min, max) CPU demand per virtual node
-    bw_range      : (min, max) BW demand per virtual link
-    fixed_seed    : if not None, returns the same batch every call
+    batch_size  : number of VNRs per batch
+    min_vnodes  : minimum number of virtual nodes per VNR (inclusive)
+    max_vnodes  : maximum number of virtual nodes per VNR (inclusive)
+    edge_prob   : Erdős–Rényi edge probability
+    cpu_range   : (min, max) CPU demand per virtual node
+    bw_range    : (min, max) BW demand per virtual link
+    fixed_seed  : if not None, returns the same batch every call
 
     Returns
     -------
     Callable[[], list[nx.Graph]]
     """
+    if min_vnodes > max_vnodes:
+        raise ValueError(f"min_vnodes ({min_vnodes}) must be <= max_vnodes ({max_vnodes})")
+    if min_vnodes < 2:
+        raise ValueError("min_vnodes must be >= 2")
+
     def _fn() -> list:
         if fixed_seed is not None:
             random.seed(fixed_seed)
 
         batch = []
         for _ in range(batch_size):
-            if variable_size:
-                n = random.randint(max(2, num_nodes - 2), num_nodes + 2)
-            else:
-                n = num_nodes
+            n = random.randint(min_vnodes, max_vnodes)
             vnr = generate_single_vnr(
                 num_nodes  = n,
                 edge_prob  = edge_prob,
@@ -141,7 +154,10 @@ def make_batch_fn(
 def make_env_fns(
     substrate_nodes: int   = 50,
     batch_size:      int   = 10,
-    vnr_nodes:       int   = 4,
+    # VNR size range — each VNR in a batch gets an independent node count drawn
+    # uniformly from [vnr_min_nodes, vnr_max_nodes].
+    vnr_min_nodes:   int   = 2,
+    vnr_max_nodes:   int   = 8,
     sub_cpu_range:   Tuple = (30, 80),
     sub_bw_range:    Tuple = (30, 100),
     vnr_cpu_range:   Tuple = (10, 40),
@@ -156,7 +172,8 @@ def make_env_fns(
     ----------
     substrate_nodes : size of the substrate network
     batch_size      : number of VNRs per episode
-    vnr_nodes       : average VNR size
+    vnr_min_nodes   : minimum virtual nodes per VNR (inclusive)
+    vnr_max_nodes   : maximum virtual nodes per VNR (inclusive)
     sub_cpu_range   : substrate CPU capacity range
     sub_bw_range    : substrate BW capacity range
     vnr_cpu_range   : VNR CPU demand range
@@ -176,7 +193,8 @@ def make_env_fns(
     )
     batch_fn = make_batch_fn(
         batch_size = batch_size,
-        num_nodes  = vnr_nodes,
+        min_vnodes = vnr_min_nodes,
+        max_vnodes = vnr_max_nodes,
         cpu_range  = vnr_cpu_range,
         bw_range   = vnr_bw_range,
     )

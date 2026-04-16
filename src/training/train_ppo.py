@@ -83,7 +83,10 @@ class PPOConfig:
     # Environment
     substrate_nodes:  int   = 50
     batch_size_env:   int   = 10
-    vnr_nodes:        int   = 4
+    # VNR size range: each VNR in a batch independently samples its node count
+    # uniformly from [vnr_min_nodes, vnr_max_nodes], giving a varied dataset.
+    vnr_min_nodes:    int   = 2
+    vnr_max_nodes:    int   = 8
     fixed_substrate:  bool  = False
     hpso_particles:   int   = 20
     hpso_iterations:  int   = 30
@@ -94,7 +97,7 @@ class PPOConfig:
     save_dir:   str = "checkpoints"
     run_name:   str = "ppo_phase2"
     device:     str = "auto"
-    
+
     # Checkpoint to resume from (Optional)
     load_checkpoint: Optional[str] = None
 
@@ -143,12 +146,14 @@ class PPOTrainerScheduler:
             self.device = torch.device(cfg.device)
 
         # Networks
-        scheduler = VNRScheduler(use_batch_context=cfg.use_batch_context)
-        
         if cfg.load_checkpoint and os.path.exists(cfg.load_checkpoint):
             print(f"[PPO] Loading checkpoint from: {cfg.load_checkpoint}")
-            scheduler.load(cfg.load_checkpoint)
-        
+            # VNRScheduler.load() is a classmethod that returns a new instance;
+            # assign it explicitly (the old code silently discarded the return value).
+            scheduler = VNRScheduler.load(cfg.load_checkpoint)
+        else:
+            scheduler = VNRScheduler(use_batch_context=cfg.use_batch_context)
+
         self.ac = GNNActorCritic(scheduler).to(self.device)
 
         self.optimizer = torch.optim.Adam(self.ac.parameters(), lr=cfg.lr)
@@ -157,7 +162,8 @@ class PPOTrainerScheduler:
         substrate_fn, batch_fn = make_env_fns(
             substrate_nodes = cfg.substrate_nodes,
             batch_size      = cfg.batch_size_env,
-            vnr_nodes       = cfg.vnr_nodes,
+            vnr_min_nodes   = cfg.vnr_min_nodes,
+            vnr_max_nodes   = cfg.vnr_max_nodes,
             fixed_substrate = cfg.fixed_substrate,
         )
         self.env = VNEOrderingEnv(
@@ -474,7 +480,11 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Disable BatchContextEncoder")
     p.add_argument("--sub-nodes",    type=int,   default=50)
     p.add_argument("--vnr-batch",    type=int,   default=10)
-    p.add_argument("--vnr-nodes",    type=int,   default=4)
+    # VNR size range flags (replace old single --vnr-nodes)
+    p.add_argument("--vnr-min-nodes", type=int,  default=2,
+                   help="Minimum virtual nodes per VNR (inclusive)")
+    p.add_argument("--vnr-max-nodes", type=int,  default=8,
+                   help="Maximum virtual nodes per VNR (inclusive)")
     p.add_argument("--hpso-iter",    type=int,   default=30)
     p.add_argument("--log-every",    type=int,   default=10_000)
     p.add_argument("--save-every",   type=int,   default=50_000)
@@ -502,7 +512,8 @@ if __name__ == "__main__":
         use_batch_context = not args.no_ctx,
         substrate_nodes   = args.sub_nodes,
         batch_size_env    = args.vnr_batch,
-        vnr_nodes         = args.vnr_nodes,
+        vnr_min_nodes     = args.vnr_min_nodes,
+        vnr_max_nodes     = args.vnr_max_nodes,
         hpso_iterations   = args.hpso_iter,
         log_every         = args.log_every,
         save_every        = args.save_every,

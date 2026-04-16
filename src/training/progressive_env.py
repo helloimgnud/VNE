@@ -86,16 +86,20 @@ class ProgressiveDeploymentWrapper(gymnasium.Wrapper):
         # Use inner env's original base logic if possible, or build custom scaled VNRs
         # For simplicity, we sample from original and scale them up
         batch = self.original_batch_fn()
-        
+
+        # Infer the observed node-count range from the returned batch so that
+        # any synthetic extra VNRs stay within the same size distribution.
+        observed_sizes = [len(g.nodes) for g in batch]
+        min_n = max(2, min(observed_sizes))
+        max_n = max(min_n, max(observed_sizes))
+
         # Adjust batch size
         if len(batch) < self.current_batch_size:
-            # Need to synthesize more VNRs using the first one as template parameters
+            # Need to synthesize more VNRs; sample size from observed range
             extra_count = self.current_batch_size - len(batch)
             for _ in range(extra_count):
-                template = batch[0]
-                n = len(template.nodes)
-                # Sample ranges from typical
-                cpu_req = (10, 40) 
+                n = random.randint(min_n, max_n)
+                cpu_req = (10, 40)
                 bw_req = (10, 50)
                 vnr = generate_single_vnr(n, 0.5, cpu_req, bw_req)
                 batch.append(vnr)

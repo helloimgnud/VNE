@@ -73,28 +73,38 @@ Examples:
         default=10,
         help='Number of dataset replicas to generate (default: 10)'
     )
-    
+
     parser.add_argument(
         '--substrate-nodes',
         type=str,
         default=None,
         help='Substrate nodes range, e.g., "80,120" (default: 100,100)'
     )
-    
+
     parser.add_argument(
         '--num-vnrs',
         type=str,
         default=None,
         help='Number of VNRs range, e.g., "150,250" (default: 200,200)'
     )
-    
+
+    # VNR size range: replaces the old discrete --vnode-range list.
+    # A single dataset now contains VNRs with node counts drawn uniformly
+    # from [vnr-min-nodes, vnr-max-nodes] rather than separate fixed-count files.
     parser.add_argument(
-        '--vnode-range',
-        type=str,
-        default=None,
-        help='Virtual node counts, e.g., "2,4,6,8" (default: 2,4,6,8)'
+        '--vnr-min-nodes',
+        type=int,
+        default=2,
+        help='Minimum number of virtual nodes per VNR (default: 2)'
     )
-    
+
+    parser.add_argument(
+        '--vnr-max-nodes',
+        type=int,
+        default=8,
+        help='Maximum number of virtual nodes per VNR (default: 8)'
+    )
+
     parser.add_argument(
         '--base-seed',
         type=int,
@@ -107,17 +117,18 @@ Examples:
     # Parse range arguments
     substrate_nodes_range = parse_range(args.substrate_nodes, (100, 100))
     num_vnrs_range = parse_range(args.num_vnrs, (200, 200))
-    
-    # Parse vnode_range
-    if args.vnode_range:
-        vnode_range = [int(x.strip()) for x in args.vnode_range.split(',')]
-    else:
-        vnode_range = [2, 4, 6, 8]
-    
+    vnr_min_nodes = args.vnr_min_nodes
+    vnr_max_nodes = args.vnr_max_nodes
+
+    # Build vnode_range list for metadata/legacy compat (min, max as bookends)
+    vnode_range = list(range(vnr_min_nodes, vnr_max_nodes + 1, max(1, (vnr_max_nodes - vnr_min_nodes) // 3)))
+    if vnode_range[-1] != vnr_max_nodes:
+        vnode_range.append(vnr_max_nodes)
+
     # Expand 'all' to all experiments
     if 'all' in args.experiments:
         args.experiments = ['fig6', 'fig7', 'fig8']
-    
+
     print("\n" + "="*70)
     print(" VNE DATASET GENERATOR ".center(70, "="))
     print("="*70)
@@ -127,7 +138,7 @@ Examples:
     print(f"   • Num replicas: {args.num_replicas}")
     print(f"   • Substrate nodes range: {substrate_nodes_range}")
     print(f"   • Num VNRs range: {num_vnrs_range}")
-    print(f"   • VNode range: {vnode_range}")
+    print(f"   • VNR node range: [{vnr_min_nodes}, {vnr_max_nodes}]")
     print(f"   • Base seed: {args.base_seed}")
     print(f"   • Force regeneration: {args.force}")
     print()
@@ -170,7 +181,6 @@ Examples:
                     base_seed=args.base_seed
                 )
                 generated[exp_name] = metadata
-            
             elif exp_name == 'fig7':
                 metadata = generator.generate_fig7_dataset()
                 generated[exp_name] = metadata

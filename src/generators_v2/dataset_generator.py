@@ -101,7 +101,7 @@ class DatasetGeneratorV2:
         avg_inter_arrival: float = 1.0,
         num_replicas: int = 10,
         base_seed: int = 42,
-        # NEW: optional extra attributes ──────────────────────────────────────
+        # NEW: optional extra attributes ─────────────────────────────────────
         substrate_memory_range: Optional[Tuple[int, int]] = None,
         vnr_memory_range: Optional[Tuple[int, int]] = None,
         latency_range: Optional[Tuple[float, float]] = None,
@@ -109,11 +109,21 @@ class DatasetGeneratorV2:
         """
         Generate dataset for Fig6 (impact of virtual node count).
 
-        Backward-compatible with the original DatasetGenerator.generate_fig6_dataset.
+        Each replica now produces **one** mixed-size VNR stream whose node counts
+        are drawn uniformly from ``[min(vnode_range), max(vnode_range)]`` rather
+        than one separate file per fixed count.  This reflects the real training
+        scenario where a single dataset contains VNRs of varying sizes.
+
+        ``metadata["vnr_min_nodes"]`` and ``metadata["vnr_max_nodes"]`` record
+        the range used; ``metadata["vnode_range"]`` is kept for backwards-compat
+        reference only.
         """
         exp_dir = os.path.join(self.base_dir, "fig6")
         os.makedirs(exp_dir, exist_ok=True)
         self._header("FIG6 DATASET", num_replicas)
+
+        min_vnodes = min(vnode_range)
+        max_vnodes = max(vnode_range)
 
         replicas = []
         rng = random.Random(base_seed)
@@ -129,7 +139,8 @@ class DatasetGeneratorV2:
             os.makedirs(replica_dir, exist_ok=True)
 
             print(f"\n[Replica {replica_id + 1}/{num_replicas}] "
-                  f"nodes={num_nodes_total}, vnrs={num_vnrs}, seed={replica_seed}")
+                  f"nodes={num_nodes_total}, vnrs={num_vnrs}, "
+                  f"vnode_range=[{min_vnodes},{max_vnodes}], seed={replica_seed}")
 
             substrate_path = os.path.join(replica_dir, "substrate.json")
             generate_substrate(
@@ -146,24 +157,22 @@ class DatasetGeneratorV2:
                 export_path=substrate_path,
             )
 
-            vnr_configs: Dict[str, str] = {}
-            for num_vnodes in vnode_range:
-                vnr_path = os.path.join(replica_dir, f"vnr_{num_vnodes}nodes.json")
-                generate_vnr_stream_v2(
-                    num_vnrs=num_vnrs,
-                    num_domains=num_domains,
-                    min_vnodes=num_vnodes,
-                    max_vnodes=num_vnodes + 1,
-                    cpu_range=vnr_cpu_range,
-                    bw_range=vnr_bw_range,
-                    max_lifetime=max_lifetime,
-                    avg_inter_arrival=avg_inter_arrival,
-                    memory_range=vnr_memory_range,
-                    latency_range=latency_range,
-                    export_path=vnr_path,
-                    seed=replica_seed + num_vnodes,
-                )
-                vnr_configs[f"{num_vnodes}nodes"] = vnr_path
+            # Single mixed-range VNR stream per replica
+            vnr_path = os.path.join(replica_dir, "vnr_stream.json")
+            generate_vnr_stream_v2(
+                num_vnrs=num_vnrs,
+                num_domains=num_domains,
+                min_vnodes=min_vnodes,
+                max_vnodes=max_vnodes,
+                cpu_range=vnr_cpu_range,
+                bw_range=vnr_bw_range,
+                max_lifetime=max_lifetime,
+                avg_inter_arrival=avg_inter_arrival,
+                memory_range=vnr_memory_range,
+                latency_range=latency_range,
+                export_path=vnr_path,
+                seed=replica_seed + 1,
+            )
 
             replicas.append({
                 "replica_id": replica_id,
@@ -171,13 +180,15 @@ class DatasetGeneratorV2:
                 "substrate_nodes": num_nodes_total,
                 "num_vnrs": num_vnrs,
                 "substrate_path": substrate_path,
-                "vnr_configs": vnr_configs,
+                "vnr_path": vnr_path,
             })
 
         metadata = {
             "experiment": "fig6",
-            "description": "Impact of Virtual Nodes",
-            "vnode_range": vnode_range,
+            "description": "Impact of Virtual Nodes (mixed-range VNR stream)",
+            "vnode_range": vnode_range,         # kept for reference
+            "vnr_min_nodes": min_vnodes,
+            "vnr_max_nodes": max_vnodes,
             "num_domains": num_domains,
             "num_replicas": num_replicas,
             "base_seed": base_seed,
@@ -418,7 +429,7 @@ class DatasetGeneratorV2:
         num_nodes_total: int = 80,
         num_vnrs: int = 1000,
         min_vnodes: int = 2,
-        max_vnodes: int = 8,
+        max_vnodes: int = 10,
         substrate_cpu_range: Tuple[int, int] = (100, 300),
         substrate_bw_range: Tuple[int, int] = (1000, 3000),
         vnr_cpu_range: Tuple[int, int] = (10, 80),
@@ -430,8 +441,9 @@ class DatasetGeneratorV2:
         """
         Pre-tuned dataset for RL agent training (PPO / REINFORCE).
 
-        The VNR stream is intentionally demanding (high resource ranges)
-        to expose the agent to congestion scenarios during training.
+        VNR node counts vary uniformly from ``min_vnodes`` to ``max_vnodes``
+        within a single stream, exposing the agent to requests of all sizes during
+        training and improving generalisation.
 
         Returns
         -------
