@@ -27,6 +27,7 @@ New reward modes can be added by:
   3. Adding the new entry to ``_REWARD_FNS``
 """
 
+from src.evaluation.eval import cost_of_vnr
 from __future__ import annotations
 
 import enum
@@ -59,7 +60,7 @@ def _revenue(vnr: nx.Graph) -> float:
 
 def _demand_cost(vnr: nx.Graph) -> float:
     """Lightweight cost proxy (same as revenue — used only as fallback)."""
-    return _revenue(vnr) + 1e-6
+    return cost_of_vnr(vnr) + 1e-6
 
 
 def _real_rc(vnr: nx.Graph, real_step_cost: Optional[float]) -> float:

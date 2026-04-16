@@ -12,7 +12,7 @@ import argparse
 # Add src to path
 # sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from src.generators.dataset_generator import DatasetGenerator
+from src.generators_v2.dataset_generator import DatasetGeneratorV2 as DatasetGenerator
 
 
 def parse_range(value, default):
@@ -49,7 +49,7 @@ Examples:
     parser.add_argument(
         '--experiments',
         nargs='+',
-        choices=['fig6', 'fig7', 'fig8', 'all'],
+        choices=['fig6', 'fig7', 'fig8', 'rl', 'stress', 'custom', 'all'],
         default=['all'],
         help='Which experiment datasets to generate'
     )
@@ -177,6 +177,25 @@ Examples:
             
             elif exp_name == 'fig8':
                 metadata = generator.generate_fig8_dataset()
+                generated[exp_name] = metadata
+            
+            elif exp_name == 'rl':
+                metadata = generator.generate_rl_training_dataset(seed=args.base_seed)
+                generated[exp_name] = metadata
+            
+            elif exp_name == 'stress':
+                metadata = generator.generate_stress_dataset(seed=args.base_seed)
+                generated[exp_name] = metadata
+                
+            elif exp_name == 'custom':
+                custom_vnrs = parse_range(args.num_vnrs, (300, 300))[0] # use lower bound
+                custom_nodes = parse_range(args.substrate_nodes, (80, 80))[0]
+                metadata = generator.generate_custom_dataset(
+                    name="custom", 
+                    num_vnrs=custom_vnrs, 
+                    num_nodes_total=custom_nodes, 
+                    seed=args.base_seed
+                )
                 generated[exp_name] = metadata
         
         except Exception as e:
