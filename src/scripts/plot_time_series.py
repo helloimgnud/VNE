@@ -20,10 +20,10 @@ def parse_args():
         help="Metrics to plot (defaults to Acceptance Rate, Cost, and Revenue)"
     )
     parser.add_argument(
-        "--vnodes", 
+        "--replica", 
         type=int, 
         default=None, 
-        help="Filter the analysis by a specific number of virtual nodes (num_vnodes)"
+        help="Filter the analysis by a specific dataset replica ID"
     )
     parser.add_argument(
         "--save_path", 
@@ -59,16 +59,16 @@ def main():
     # Show user what columns actually exist
     print(f"Available columns: {', '.join(df.columns.tolist())}")
     
-    # Filter dataset based on the requested vnodes
-    if args.vnodes is not None:
-        if 'num_vnodes' in df.columns:
-            df = df[df['num_vnodes'] == args.vnodes]
-            print(f"Filtered dataset for num_vnodes = {args.vnodes}")
+    # Filter dataset based on the requested replica
+    if args.replica is not None:
+        if 'replica_id' in df.columns:
+            df = df[df['replica_id'] == args.replica]
+            print(f"Filtered dataset for replica_id = {args.replica}")
             if df.empty:
-                print("No data left after filtering! Please check if your vnodes param exists in the CSV.")
+                print("No data left after filtering! Please check if your replica param exists in the CSV.")
                 return
         else:
-            print("Warning: '--vnodes' given but 'num_vnodes' column is absent in dataset.")
+            print("Warning: '--replica' given but 'replica_id' column is absent in dataset.")
             
     # Set default metrics and their display names
     metric_display_names = {
@@ -81,11 +81,12 @@ def main():
     if args.metrics == ["avg_revenue", "avg_cost", "acceptance_ratio"]:
         args.metrics = ["acceptance_ratio", "avg_cost", "avg_revenue"]
 
-    # Calculate average of all records for the same key (algorithm, vnodes, domains, time point)
-    print(f"Averaging records grouped by algorithm/vnodes/domains and '{args.x_axis}'...")
+    # Calculate average of all records for the same key (algorithm, replica_id, domains, time point)
+    # This ensures we get 1 line per (algorithm, dataset/replica) pair
+    print(f"Averaging records grouped by algorithm/replica_id/domains and '{args.x_axis}'...")
     
     # We group by these columns to ensure they are preserved in the averaged dataframe
-    group_cols = ['algorithm', 'num_vnodes', 'num_domains', args.x_axis]
+    group_cols = ['algorithm', 'replica_id', 'num_domains', args.x_axis]
     df_avg = df.groupby(group_cols).mean(numeric_only=True).reset_index()
 
     # Retain only requested metrics that actually exist in the dataframe
@@ -103,18 +104,26 @@ def main():
     # Set beautiful aesthetics
     sns.set_theme(style="whitegrid")
     
-    # Map algorithm to colors and vnodes to line styles/markers
+    # Map algorithm to colors and replica_id to line styles/markers
     for ax, metric in zip(axes, available_metrics):
         display_name = metric_display_names.get(metric, metric.replace("_", " ").title())
         print(f"Plotting averaged {metric} ({display_name}) over time...")
         
+        # Ensure replica_id is continuous or categorical as needed for style
+        if 'replica_id' in df_avg.columns:
+            # We want replica_id to be treated as a category for styling
+            df_avg['replica_id'] = df_avg['replica_id'].astype(str)
+            style_col = "replica_id"
+        else:
+            style_col = None
+
         sns.lineplot(
             data=df_avg, 
             x=args.x_axis, 
             y=metric, 
             hue="algorithm", 
-            style="num_vnodes",
-            markers=True,      # Use different markers for different vnode configs
+            style=style_col,
+            markers=True,      # Use different markers for different configs
             dashes=True,       # Also use different line styles (solid, dashed, etc.)
             markersize=8,
             linewidth=2.5,
@@ -126,7 +135,7 @@ def main():
         ax.set_xlabel(args.x_axis.replace("_", " ").title(), fontsize=13)
         
         # Legend formatting - move legend to the side to avoid overlapping lines
-        ax.legend(title="Algorithm | VNodes", loc='upper left', bbox_to_anchor=(1, 1), fontsize=9)
+        ax.legend(title="Algorithm | Replica (Dataset)", loc='upper left', bbox_to_anchor=(1, 1), fontsize=9)
         
     plt.tight_layout()
     
@@ -138,8 +147,8 @@ def main():
     else:
         # Save near the source CSV file by default
         base_name = args.csv_file.replace('.csv', '')
-        vnode_suffix = f"_vnodes{args.vnodes}" if args.vnodes else ""
-        default_save = f"{base_name}_plotted_{args.x_axis}{vnode_suffix}.png"
+        replica_suffix = f"_replica{args.replica}" if args.replica is not None else ""
+        default_save = f"{base_name}_plotted_{args.x_axis}{replica_suffix}.png"
         
         plt.savefig(default_save, dpi=args.dpi, bbox_inches="tight")
         print(f"\nSaved plotted sequence to {default_save}")

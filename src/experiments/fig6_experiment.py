@@ -284,19 +284,19 @@ class Fig6Experiment(BaseExperiment):
             ('avg_execution_time', 'Average Execution Time (s)', axes[1, 1])
         ]
         
-        vnode_values = sorted(df['num_vnodes'].unique())
+        replica_values = sorted(df['replica_id'].unique())
         n_algorithms = len(algorithms)
         bar_width = 0.8 / n_algorithms
         
         for metric_name, ylabel, ax in metrics_config:
-            x = np.arange(len(vnode_values))
+            x = np.arange(len(replica_values))
             
             for idx, algo in enumerate(algorithms):
                 algo_df = df[df['algorithm'] == algo]
                 
-                # Group by num_vnodes and compute mean only
-                grouped = algo_df.groupby('num_vnodes')[metric_name].mean()
-                means = [grouped.get(v, 0) for v in vnode_values]
+                # Group by replica_id and compute mean across eval_runs
+                grouped = algo_df.groupby('replica_id')[metric_name].mean()
+                means = [grouped.get(v, 0) for v in replica_values]
                 
                 # Calculate bar position offset
                 offset = (idx - n_algorithms / 2 + 0.5) * bar_width
@@ -327,11 +327,11 @@ class Fig6Experiment(BaseExperiment):
                             fontsize=6, rotation=90
                         )
             
-            ax.set_xlabel('Number of Virtual Nodes')
+            ax.set_xlabel('Dataset Replica')
             ax.set_ylabel(ylabel)
-            ax.set_title(f'{ylabel} vs Virtual Nodes')
+            ax.set_title(f'{ylabel} by Replica')
             ax.set_xticks(x)
-            ax.set_xticklabels(vnode_values)
+            ax.set_xticklabels([f"Rep {v}" for v in replica_values])
             ax.legend()
             ax.grid(True, alpha=0.3, axis='y')
 
@@ -346,18 +346,18 @@ class Fig6Experiment(BaseExperiment):
             ('avg_execution_time', 'Average Execution Time (s)', axes[1, 1])
         ]
         
-        vnode_values = sorted(df['num_vnodes'].unique())
+        replica_values = sorted(df['replica_id'].unique())
         n_algorithms = len(algorithms)
         bar_width = 0.8 / n_algorithms
         
         for metric_name, ylabel, ax in metrics_config:
-            x = np.arange(len(vnode_values))
+            x = np.arange(len(replica_values))
             
             for idx, algo in enumerate(algorithms):
-                algo_df = df[df['algorithm'] == algo].sort_values('num_vnodes')
-                means = [algo_df[algo_df['num_vnodes'] == v][metric_name].values[0] 
-                        if len(algo_df[algo_df['num_vnodes'] == v]) > 0 else 0 
-                        for v in vnode_values]
+                algo_df = df[df['algorithm'] == algo].sort_values('replica_id')
+                means = [algo_df[algo_df['replica_id'] == v][metric_name].values[0] 
+                        if len(algo_df[algo_df['replica_id'] == v]) > 0 else 0 
+                        for v in replica_values]
                 
                 # Calculate bar position offset
                 offset = (idx - n_algorithms / 2 + 0.5) * bar_width
@@ -388,10 +388,10 @@ class Fig6Experiment(BaseExperiment):
                             fontsize=6, rotation=90
                         )
             
-            ax.set_xlabel('Number of Virtual Nodes')
+            ax.set_xlabel('Dataset Replica')
             ax.set_ylabel(ylabel)
-            ax.set_title(f'{ylabel} vs Virtual Nodes')
+            ax.set_title(f'{ylabel} by Replica')
             ax.set_xticks(x)
-            ax.set_xticklabels(vnode_values)
+            ax.set_xticklabels([f"Rep {v}" for v in replica_values])
             ax.legend()
             ax.grid(True, alpha=0.3, axis='y')
