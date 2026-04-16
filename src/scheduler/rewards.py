@@ -27,8 +27,8 @@ New reward modes can be added by:
   3. Adding the new entry to ``_REWARD_FNS``
 """
 
-from src.evaluation.eval import cost_of_vnr
 from __future__ import annotations
+from src.evaluation.eval import cost_of_vnr
 
 import enum
 from typing import List, Optional, Tuple

@@ -24,8 +24,8 @@ from typing import Callable, Optional, Tuple
 
 import networkx as nx
 
-from src.generators.substrate_generator import generate_substrate
-from src.generators.vnr_generator import generate_single_vnr
+from src.generators_v2.substrate_generator import generate_substrate
+from src.generators_v2.vnr_generator import generate_single_vnr
 
 
 # ---------------------------------------------------------------------------

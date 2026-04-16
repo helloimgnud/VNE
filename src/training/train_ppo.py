@@ -94,6 +94,9 @@ class PPOConfig:
     save_dir:   str = "checkpoints"
     run_name:   str = "ppo_phase2"
     device:     str = "auto"
+    
+    # Checkpoint to resume from (Optional)
+    load_checkpoint: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +144,12 @@ class PPOTrainerScheduler:
 
         # Networks
         scheduler = VNRScheduler(use_batch_context=cfg.use_batch_context)
-        self.ac   = GNNActorCritic(scheduler).to(self.device)
+        
+        if cfg.load_checkpoint and os.path.exists(cfg.load_checkpoint):
+            print(f"[PPO] Loading checkpoint from: {cfg.load_checkpoint}")
+            scheduler.load(cfg.load_checkpoint)
+        
+        self.ac = GNNActorCritic(scheduler).to(self.device)
 
         self.optimizer = torch.optim.Adam(self.ac.parameters(), lr=cfg.lr)
 
@@ -473,6 +481,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--save-dir",     type=str,   default="checkpoints")
     p.add_argument("--run-name",     type=str,   default="ppo_phase2")
     p.add_argument("--device",       type=str,   default="auto")
+    p.add_argument("--load-checkpoint", type=str, default=None,
+                   help="Path to checkpoint to resume training from")
     return p
 
 
@@ -499,6 +509,7 @@ if __name__ == "__main__":
         save_dir          = args.save_dir,
         run_name          = args.run_name,
         device            = args.device,
+        load_checkpoint   = args.load_checkpoint,
     )
     trainer = PPOTrainerScheduler(cfg)
     trainer.train()
