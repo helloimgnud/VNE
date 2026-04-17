@@ -187,11 +187,11 @@ def main():
         ax.set_ylabel(display_name, fontsize=13)
         ax.set_xlabel(args.x_axis.replace("_", " ").title(), fontsize=13)
 
-        # Subtitle showing how many datasets and replicas were averaged
-        n_replicas = df["replica_id"].nunique() if "replica_id" in df.columns else 1
+        # Subtitle showing exactly what was averaged
+        n_eval_runs = df["eval_run"].nunique() if "eval_run" in df.columns else 1
         ax.set_title(
             f"Simulation Progression of {display_name}\n"
-            f"({n_datasets} dataset(s), replicas averaged: {n_replicas})",
+            f"({n_datasets} dataset(s) plotted separately, runs averaged per dataset: {n_eval_runs})",
             fontsize=14, fontweight="bold"
         )
 
