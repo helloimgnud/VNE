@@ -98,40 +98,50 @@ def _reward_r2c_ac(
     step_cost: Optional[float] = None, accepted_costs: Optional[List[float]] = None,
     substrate_util: Optional[dict] = None
 ) -> float:
-    """Revenue/Cost per step + terminal acceptance-rate bonus.
+    """Convex blend of normalised R/C and running Acceptance Rate.
 
-    Per step:
-      - Accept: R/C ratio of this VNR.
-      - Reject: small penalty scaled by how many VNRs are already rejected
-                relative to total (inline AR pressure).
+    Formulation
+    -----------
+      Accept:  r = α · r2c_norm  +  (1-α) · inline_ar
+      Reject:  r = -(1-α) · (1 - inline_ar)
 
-    Terminal step bonus:
-      ar * 3.0 + rc * 2.0   (lighter than LONGTERM to avoid over-weighting
-                              terminal; PPO's GAE spreads credit naturally).
+    where
+      r2c_norm  = r2c / (1 + r2c)   squashes [0, ∞) → [0, 1)   monotone-preserving
+      inline_ar = n_accepted / n_total  running AR at this step  ∈ [0, 1]
+      α         = 0.5               equal weight; tune toward 1.0 to prioritise efficiency
+
+    Reward range (α = 0.5)
+    ----------------------
+      Accept: [0,  1)    always non-negative, bounded
+      Reject: [-0.5, 0]  penalty grows as current AR worsens
+      Full:   [-0.5, 1)
+
+    Why no terminal bonus?
+    ----------------------
+    inline_ar already injects AR pressure at every step, so a terminal spike
+    is redundant and would reintroduce the return-scale explosion.
+    GAE (γ=0.99, λ=0.95) propagates the accumulated per-step AR signal
+    backward through time naturally.
     """
-    n_total = len(accepted) + len(rejected) + (0 if success else 0)  # current counts
-    # per-step component
+    _ALPHA = 0.5   # tune: higher → care more about efficiency, lower → care more about AR
+
+    # Note: accepted / rejected already include the current VNR —
+    # env.step() appends before calling compute_reward.
+    n_accepted = len(accepted)
+    n_total    = n_accepted + len(rejected)
+    inline_ar  = n_accepted / (n_total + 1e-9)
+
     if success:
-        step_r = _real_rc(vnr, step_cost)
+        rc      = _real_rc(vnr, step_cost)   # raw R/C ∈ [0, ∞)
+        rc_norm = rc / (1.0 + rc)            # squashed ∈ [0, 1)
+        reward  = _ALPHA * rc_norm + (1.0 - _ALPHA) * inline_ar
     else:
-        # Scale rejection penalty by current inline AR: more rejects → bigger penalty
-        n_rej_so_far = len(rejected)
-        inline_ar = len(accepted) / (n_total + 1e-9)
-        step_r = -_revenue(vnr) * (0.1 + 0.2 * (1.0 - inline_ar))
+        # Penalty proportional to how much AR is currently suffering
+        reward = -(1.0 - _ALPHA) * (1.0 - inline_ar)
 
-    # terminal bonus
-    if done:
-        total_rev = sum(_revenue(v) for v, _, _ in accepted)
-        if accepted_costs and len(accepted_costs) == len(accepted):
-            total_cost = sum(accepted_costs)
-        else:
-            total_cost = sum(_demand_cost(v) for v, _, _ in accepted)
-        n_all = len(accepted) + len(rejected)
-        ar = len(accepted) / (n_all + 1e-9)
-        rc = total_rev / (total_cost + 1e-6)
-        step_r += ar * 3.0 + rc * 2.0
+    return reward
 
-    return step_r
+
 
 
 def _reward_revenue(

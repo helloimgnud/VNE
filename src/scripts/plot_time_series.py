@@ -4,160 +4,225 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Visualize time series metrics from VNE experiments")
     parser.add_argument(
-        "--csv_file", 
-        type=str, 
-        required=True, 
+        "--csv_file",
+        type=str,
+        required=True,
         help="Path to the time-series CSV file (e.g., results/fig6/time_series_fig6_experiment_xxx.csv)"
     )
     parser.add_argument(
-        "--metrics", 
-        type=str, 
-        nargs="+", 
+        "--metrics",
+        type=str,
+        nargs="+",
         default=["acceptance_ratio", "avg_cost", "avg_revenue"],
         help="Metrics to plot (defaults to Acceptance Rate, Cost, and Revenue)"
     )
     parser.add_argument(
-        "--replica", 
-        type=int, 
-        default=None, 
-        help="Filter the analysis by a specific dataset replica ID"
+        "--dataset_col",
+        type=str,
+        nargs="+",
+        default=None,
+        help=(
+            "Column(s) that together identify a dataset configuration. "
+            "Runs sharing the same values in these columns are averaged. "
+            "Leave blank to auto-detect (prefers dataset_id)."
+        )
     )
     parser.add_argument(
-        "--save_path", 
-        type=str, 
-        default=None, 
+        "--dataset_filter",
+        type=str,
+        default=None,
+        help=(
+            "Filter to a specific dataset label (the value that appears after grouping). "
+            "Format matches the auto-generated label, e.g. 'vnodes=2-8'. "
+            "Leave blank to show all datasets."
+        )
+    )
+    parser.add_argument(
+        "--save_path",
+        type=str,
+        default=None,
         help="Custom path to save the generated plot. If not provided, it saves next to the CSV."
     )
     parser.add_argument(
-        "--x_axis", 
-        type=str, 
-        default="window_idx", 
-        choices=["window_idx", "time"], 
+        "--x_axis",
+        type=str,
+        default="window_idx",
+        choices=["window_idx", "time"],
         help="What to use for the X-axis (either window_idx or actual physical time in simulation)"
     )
     parser.add_argument(
-        "--dpi", 
-        type=int, 
-        default=300, 
+        "--dpi",
+        type=int,
+        default=300,
         help="DPI of the output image"
     )
     return parser.parse_args()
 
+
+def _make_dataset_label(row: pd.Series, dataset_cols: list) -> str:
+    """Build a human-readable dataset label from the identifying columns."""
+    if "dataset_id" in dataset_cols:
+        return str(row["dataset_id"])
+    if dataset_cols == ["vnr_min_nodes", "vnr_max_nodes"]:
+        return f"vnodes={int(row['vnr_min_nodes'])}-{int(row['vnr_max_nodes'])}"
+    if dataset_cols == ["vnr_min_nodes", "vnr_max_nodes", "replica_id"]:
+        return f"vnodes={int(row['vnr_min_nodes'])}-{int(row['vnr_max_nodes'])}_rep={row['replica_id']}"
+    # Generic: col=value pairs joined by "/"
+    return " / ".join(f"{c}={row[c]}" for c in dataset_cols)
+
+
 def main():
     args = parse_args()
-    
+
     if not os.path.exists(args.csv_file):
         print(f"Error: CSV file '{args.csv_file}' not found.")
         return
-        
+
     print(f"Loading time-series data from {args.csv_file}...")
     df = pd.read_csv(args.csv_file)
-    
+
     # Show user what columns actually exist
     print(f"Available columns: {', '.join(df.columns.tolist())}")
-    
-    # Filter dataset based on the requested replica
-    if args.replica is not None:
-        if 'replica_id' in df.columns:
-            df = df[df['replica_id'] == args.replica]
-            print(f"Filtered dataset for replica_id = {args.replica}")
-            if df.empty:
-                print("No data left after filtering! Please check if your replica param exists in the CSV.")
-                return
-        else:
-            print("Warning: '--replica' given but 'replica_id' column is absent in dataset.")
-            
-    # Set default metrics and their display names
-    metric_display_names = {
-        "acceptance_ratio": "Acceptance Rate",
-        "avg_cost": "Cost",
-        "avg_revenue": "Revenue"
-    }
-    
-    # If using defaults, ensure we have the requested three
-    if args.metrics == ["avg_revenue", "avg_cost", "acceptance_ratio"]:
-        args.metrics = ["acceptance_ratio", "avg_cost", "avg_revenue"]
 
-    # Calculate average of all records for the same key (algorithm, replica_id, domains, time point)
-    # This ensures we get 1 line per (algorithm, dataset/replica) pair
-    print(f"Averaging records grouped by algorithm/replica_id/domains and '{args.x_axis}'...")
-    
-    # We group by these columns to ensure they are preserved in the averaged dataframe
-    group_cols = ['algorithm', 'replica_id', 'num_domains', args.x_axis]
+    # -----------------------------------------------------------------------
+    # Build a 'dataset' label column from the identifying columns
+    # -----------------------------------------------------------------------
+    if args.dataset_col is None:
+        # Auto-detect datasets
+        if "dataset_id" in df.columns:
+            dataset_cols = ["dataset_id"]
+        elif "vnr_min_nodes" in df.columns and "vnr_max_nodes" in df.columns:
+            dataset_cols = ["vnr_min_nodes", "vnr_max_nodes"]
+            if "replica_id" in df.columns:
+                dataset_cols.append("replica_id")
+        else:
+            dataset_cols = []
+    else:
+        dataset_cols = [c for c in args.dataset_col if c in df.columns]
+
+    if not dataset_cols:
+        print(
+            f"Warning: could not automatically detect dataset columns and no valid --dataset_col was provided. "
+            f"Falling back to treating all rows as one dataset."
+        )
+        df["dataset"] = "all"
+    else:
+        df["dataset"] = df.apply(lambda row: _make_dataset_label(row, dataset_cols), axis=1)
+
+    print(f"Datasets found: {sorted(df['dataset'].unique())}")
+
+    # Optional: filter to a specific dataset
+    if args.dataset_filter is not None:
+        df = df[df["dataset"] == args.dataset_filter]
+        print(f"Filtered to dataset = '{args.dataset_filter}'")
+        if df.empty:
+            print("No data left after filtering! Check --dataset_filter value.")
+            return
+
+    # -----------------------------------------------------------------------
+    # Average replicas within each (algorithm, dataset, time-point) cell.
+    # replica_id is intentionally EXCLUDED from the grouping key so that
+    # multiple replicas of the same dataset configuration are collapsed.
+    # -----------------------------------------------------------------------
+    group_cols = ["algorithm", "dataset", args.x_axis]
+    # Add num_domains if present (it characterises the substrate, not the replica)
+    if "num_domains" in df.columns:
+        group_cols.insert(2, "num_domains")
+
+    print(f"Averaging replicas — grouping by: {group_cols}")
     df_avg = df.groupby(group_cols).mean(numeric_only=True).reset_index()
 
-    # Retain only requested metrics that actually exist in the dataframe
+    # -----------------------------------------------------------------------
+    # Validate requested metrics
+    # -----------------------------------------------------------------------
+    # Normalise metric order
+    if set(args.metrics) == {"avg_revenue", "avg_cost", "acceptance_ratio"}:
+        args.metrics = ["acceptance_ratio", "avg_cost", "avg_revenue"]
+
+    metric_display_names = {
+        "acceptance_ratio": "Acceptance Rate",
+        "avg_cost":         "Average Cost",
+        "avg_revenue":      "Average Revenue",
+    }
+
     available_metrics = [m for m in args.metrics if m in df_avg.columns]
     if not available_metrics:
         print(f"Error: None of the requested metrics ({args.metrics}) were found in the CSV.")
         return
-        
+
+    # -----------------------------------------------------------------------
+    # Plot — hue = algorithm (colour), style = dataset (line style + marker)
+    # -----------------------------------------------------------------------
     num_metrics = len(available_metrics)
-    # Give a dynamic height depending on how many metrics we want to plot simultaneously
     fig, axes = plt.subplots(num_metrics, 1, figsize=(13, 5 * num_metrics), sharex=True)
     if num_metrics == 1:
         axes = [axes]
-        
-    # Set beautiful aesthetics
+
     sns.set_theme(style="whitegrid")
-    
-    # Map algorithm to colors and replica_id to line styles/markers
+
+    n_datasets = df_avg["dataset"].nunique()
+
     for ax, metric in zip(axes, available_metrics):
         display_name = metric_display_names.get(metric, metric.replace("_", " ").title())
-        print(f"Plotting averaged {metric} ({display_name}) over time...")
-        
-        # Ensure replica_id is continuous or categorical as needed for style
-        if 'replica_id' in df_avg.columns:
-            # We want replica_id to be treated as a category for styling
-            df_avg['replica_id'] = df_avg['replica_id'].astype(str)
-            style_col = "replica_id"
-        else:
-            style_col = None
+        print(f"Plotting {metric} ({display_name}) — grouped by dataset...")
 
         sns.lineplot(
-            data=df_avg, 
-            x=args.x_axis, 
-            y=metric, 
-            hue="algorithm", 
-            style=style_col,
-            markers=True,      # Use different markers for different configs
-            dashes=True,       # Also use different line styles (solid, dashed, etc.)
+            data=df_avg,
+            x=args.x_axis,
+            y=metric,
+            hue="algorithm",   # colour  = algorithm
+            style="dataset",   # pattern = dataset configuration
+            markers=True,
+            dashes=True,
             markersize=8,
             linewidth=2.5,
-            ax=ax
+            ax=ax,
         )
-        
+
         ax.set_title(f"Simulation Progression of {display_name}", fontsize=16, fontweight="bold")
         ax.set_ylabel(display_name, fontsize=13)
         ax.set_xlabel(args.x_axis.replace("_", " ").title(), fontsize=13)
-        
-        # Legend formatting - move legend to the side to avoid overlapping lines
-        ax.legend(title="Algorithm | Replica (Dataset)", loc='upper left', bbox_to_anchor=(1, 1), fontsize=9)
-        
+
+        # Subtitle showing how many datasets and replicas were averaged
+        n_replicas = df["replica_id"].nunique() if "replica_id" in df.columns else 1
+        ax.set_title(
+            f"Simulation Progression of {display_name}\n"
+            f"({n_datasets} dataset(s), replicas averaged: {n_replicas})",
+            fontsize=14, fontweight="bold"
+        )
+
+        ax.legend(
+            title="Algorithm (colour) / Dataset (style)",
+            loc="upper left",
+            bbox_to_anchor=(1, 1),
+            fontsize=9,
+        )
+
     plt.tight_layout()
-    
-    # Save the output
+
+    # -----------------------------------------------------------------------
+    # Save
+    # -----------------------------------------------------------------------
     if args.save_path:
         os.makedirs(os.path.dirname(os.path.abspath(args.save_path)), exist_ok=True)
         plt.savefig(args.save_path, dpi=args.dpi, bbox_inches="tight")
         print(f"\nSaved plot to {args.save_path}")
     else:
-        # Save near the source CSV file by default
-        base_name = args.csv_file.replace('.csv', '')
-        replica_suffix = f"_replica{args.replica}" if args.replica is not None else ""
-        default_save = f"{base_name}_plotted_{args.x_axis}{replica_suffix}.png"
-        
+        base_name = args.csv_file.replace(".csv", "")
+        ds_suffix = f"_ds{args.dataset_filter.replace('=','-').replace('/','-')}" if args.dataset_filter else ""
+        default_save = f"{base_name}_plotted_{args.x_axis}{ds_suffix}.png"
         plt.savefig(default_save, dpi=args.dpi, bbox_inches="tight")
-        print(f"\nSaved plotted sequence to {default_save}")
-        
+        print(f"\nSaved plot to {default_save}")
+
     try:
-        # Attempt to show plot if running in an interactive session
         plt.show()
     except Exception as e:
-        print(f"Notice: Could not display plot interactively ({e}). File was successfully saved though.")
+        print(f"Notice: Could not display plot interactively ({e}). File was saved successfully.")
+
 
 if __name__ == "__main__":
     main()

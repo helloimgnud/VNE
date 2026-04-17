@@ -128,7 +128,10 @@ class Fig6Experiment(BaseExperiment):
                         if time_series:
                             ts_chunk = []
                             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            # Build a comprehensive dataset string to separate replicas properly
+                            ds_id = f"vnodes={self.vnr_min_nodes}-{self.vnr_max_nodes}_rep={replica_id}"
                             for ts in time_series:
+                                ts['dataset_id'] = ds_id
                                 ts['replica_id'] = replica_id
                                 ts['eval_run'] = run_idx
                                 ts['algorithm'] = algo_name
@@ -145,6 +148,7 @@ class Fig6Experiment(BaseExperiment):
                             pd.DataFrame(ts_chunk).to_csv(self.time_series_file, mode='a', header=not file_exists, index=False)
 
                         record = {
+                            'dataset_id': ds_id,
                             'replica_id': replica_id,
                             'eval_run': run_idx,
                             'algorithm': algo_name,
@@ -182,7 +186,9 @@ class Fig6Experiment(BaseExperiment):
                     if time_series:
                         ts_chunk = []
                         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        ds_id = f"vnodes={self.vnr_min_nodes}-{self.vnr_max_nodes}_rep=0"
                         for ts in time_series:
+                            ts['dataset_id'] = ds_id
                             ts['replica_id'] = 0
                             ts['eval_run'] = run_idx
                             ts['algorithm'] = algo_name
@@ -199,6 +205,7 @@ class Fig6Experiment(BaseExperiment):
                         pd.DataFrame(ts_chunk).to_csv(self.time_series_file, mode='a', header=not file_exists, index=False)
 
                     record = {
+                        'dataset_id': ds_id,
                         'replica_id': 0,
                         'eval_run': run_idx,
                         'algorithm': algo_name,
