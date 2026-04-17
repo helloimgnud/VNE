@@ -129,8 +129,7 @@ def hpso_embed_batch_scheduled(
     substrate     : networkx substrate graph (mutated in-place on success)
     batch         : list of VNR graphs  **or**  list of (vnr, info) tuples
     scheduler     : VNRScheduler instance (optional).
-                    If None, falls back to revenue-sort ordering (original
-                    behaviour of hpso_batch.py).
+                    If None, falls back to static revenue-sort ordering.
     particles, iterations, w_max, w_min, beta, gamma, T0, cooling_rate
                   : HPSO hyper-parameters (same defaults as hpso_batch.py)
     verbose       : print per-VNR embedding progress
@@ -145,51 +144,89 @@ def hpso_embed_batch_scheduled(
     if len(vnr_list) == 0:
         return [], []
 
-    # --- Determine processing order ---
+    accepted: list = []
+    rejected: list = []
+
     if scheduler is not None:
-        order = _scheduler_order(vnr_list, substrate, scheduler)
+        # -----------------------------------------------------
+        # Autoregressive MDP Inference (Matches PPO Training)
+        # -----------------------------------------------------
+        # The agent must observe the degraded substrate after EVERY decision
+        # to pick the next optimum VNR, just like it does in VNEOrderingEnv.
+        from src.scheduler.features import substrate_to_pyg, vnr_to_pyg
+        remaining_indices = list(range(len(vnr_list)))
+        step = 0
+
         if verbose:
-            print(f"[HPSO Scheduler] GNN ordering: {order}")
+            print(f"[HPSO Scheduler] Starting autoregressive RL inference for {len(vnr_list)} VNRs.")
+
+        while remaining_indices:
+            try:
+                sub_data = substrate_to_pyg(substrate)
+                rem_vnrs = [vnr_to_pyg(vnr_list[i]) for i in remaining_indices]
+                scores = scheduler.predict(sub_data, rem_vnrs)  # [n_remaining]
+                local_idx = scores.argmax().item()
+                global_idx = remaining_indices.pop(local_idx)
+            except Exception as exc:
+                print(f"[hpso_batch_scheduler] RL inference failed ({exc}). Falling back to static revenue-sort.")
+                remaining_indices.sort(key=lambda i: revenue_of_vnr(vnr_list[i]), reverse=True)
+                global_idx = remaining_indices.pop(0)
+
+            vnr = vnr_list[global_idx]
+            if verbose:
+                print(f"[HPSO Scheduler] RL Step {step + 1}/{len(vnr_list)}: VNR[{global_idx}]")
+
+            result = hpso_embed(
+                substrate_graph=substrate,
+                vnr_graph=vnr,
+                particles=particles, iterations=iterations,
+                w_max=w_max, w_min=w_min, beta=beta, gamma=gamma,
+                T0=T0, cooling_rate=cooling_rate,
+            )
+
+            if result is not None:
+                mapping, link_paths = result
+                accepted.append((vnr, mapping, link_paths))
+                if verbose:
+                    print("   → Accepted")
+            else:
+                rejected.append(vnr)
+                if verbose:
+                    print("   → Rejected")
+            
+            step += 1
+
     else:
+        # -----------------------------------------------------
+        # Original Static Inference (Revenue descending)
+        # -----------------------------------------------------
         order = _revenue_sort_order(vnr_list)
         if verbose:
             print(f"[HPSO Scheduler] Revenue-sort ordering: {order}")
 
-    # --- Embed in chosen order ---
-    accepted: list = []
-    rejected: list = []
+        for step, idx in enumerate(order):
+            vnr = vnr_list[idx]
 
-    for step, idx in enumerate(order):
-        vnr = vnr_list[idx]
+            if verbose:
+                print(f"[HPSO Scheduler] Step {step + 1}/{len(order)}: VNR[{idx}]")
 
-        if verbose:
-            print(
-                f"[HPSO Scheduler] Step {step + 1}/{len(order)}: "
-                f"VNR[{idx}] (nodes={len(vnr.nodes())})"
+            result = hpso_embed(
+                substrate_graph=substrate,
+                vnr_graph=vnr,
+                particles=particles, iterations=iterations,
+                w_max=w_max, w_min=w_min, beta=beta, gamma=gamma,
+                T0=T0, cooling_rate=cooling_rate,
             )
 
-        result = hpso_embed(
-            substrate_graph = substrate,
-            vnr_graph       = vnr,
-            particles       = particles,
-            iterations      = iterations,
-            w_max           = w_max,
-            w_min           = w_min,
-            beta            = beta,
-            gamma           = gamma,
-            T0              = T0,
-            cooling_rate    = cooling_rate,
-        )
-
-        if result is not None:
-            mapping, link_paths = result
-            accepted.append((vnr, mapping, link_paths))
-            if verbose:
-                print("   → Accepted")
-        else:
-            rejected.append(vnr)
-            if verbose:
-                print("   → Rejected")
+            if result is not None:
+                mapping, link_paths = result
+                accepted.append((vnr, mapping, link_paths))
+                if verbose:
+                    print("   → Accepted")
+            else:
+                rejected.append(vnr)
+                if verbose:
+                    print("   → Rejected")
 
     return accepted, rejected
 
