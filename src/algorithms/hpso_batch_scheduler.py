@@ -147,6 +147,19 @@ def hpso_embed_batch_scheduled(
     accepted: list = []
     rejected: list = []
 
+    # --- Auto-load default checkpoint if none was provided ---
+    if scheduler is None:
+        import os
+        ckpt_path = "checkpoints/ppo_phase2_final.pt"
+        if os.path.exists(ckpt_path):
+            try:
+                from src.scheduler.model import VNRScheduler
+                scheduler = VNRScheduler.load(ckpt_path)
+                if verbose:
+                    print(f"[HPSO Scheduler] Auto-loaded default model: {ckpt_path}")
+            except Exception as e:
+                print(f"[HPSO Scheduler] Warning: Could not load default model ({e})")
+
     if scheduler is not None:
         # -----------------------------------------------------
         # Autoregressive MDP Inference (Matches PPO Training)
