@@ -3,24 +3,33 @@ src/scheduler/rewards.py
 ========================
 Pluggable reward functions for the VNEOrderingEnv.
 
-Three reward modes are supported (see network_encoder_rl.md §6.2):
+Reward modes supported (see network_encoder_rl.md §6.2):
 
-  RewardMode.SIMPLE    — +1.0 on accept, -0.5 on reject.
-                         Used in Phase 1 to validate that the network can
-                         learn basic acceptance maximisation.
+  RewardMode.SIMPLE          — +1.0 on accept, -0.5 on reject.
+                               Used in Phase 1 to validate that the network
+                               can learn basic acceptance maximisation.
 
-  RewardMode.REVENUE   — revenue / cost on accept; -revenue*0.1 on reject.
-                         Adds resource-efficiency signal (Phase 2).
+  RewardMode.R2C_AC          — Revenue/Cost per step **plus** a terminal
+                               acceptance-rate bonus (ar * 3.0 + rc * 2.0).
+                               Balances efficiency AND throughput from Level 2.
 
-  RewardMode.LONGTERM  — per-step revenue (if accepted) + terminal bonus:
-                             ar * 5.0 + rc * 2.0
-                         Propagates credit assignment for the whole batch
-                         using PPO's GAE (Phase 3).
+  RewardMode.REVENUE         — revenue / cost on accept; -revenue*0.1 on
+                               reject. Pure efficiency signal (legacy Phase 2).
+
+  RewardMode.LONGTERM        — per-step revenue (if accepted) + terminal bonus:
+                                   ar * 5.0 + rc * 2.0
+                               Propagates credit assignment for the whole batch
+                               using PPO's GAE (Phase 3).
+
+  RewardMode.CONGESTION_AWARE — R/C scaled by substrate CPU fill.
+
+  RewardMode.REJECTION_SCALED — R/C on accept; heavy, fill-proportional
+                                rejection penalty.
 
 Plugin design
 -------------
 ``compute_reward(mode, last_result, vnr, done, accepted, rejected)``
-accepts one of the three modes and dispatches to the appropriate function.
+accepts one of the modes and dispatches to the appropriate function.
 New reward modes can be added by:
   1. Adding a value to ``RewardMode``
   2. Implementing a ``_reward_<name>`` function below
@@ -41,9 +50,10 @@ import networkx as nx
 # ---------------------------------------------------------------------------
 
 class RewardMode(str, enum.Enum):
-    SIMPLE   = "simple"
-    REVENUE  = "revenue"
-    LONGTERM = "longterm"
+    SIMPLE           = "simple"
+    R2C_AC           = "r2c_ac"          # Revenue/Cost + Acceptance-Rate blend
+    REVENUE          = "revenue"
+    LONGTERM         = "longterm"
     CONGESTION_AWARE = "congestion_aware"
     REJECTION_SCALED = "rejection_scaled"
 
@@ -81,6 +91,47 @@ def _reward_simple(
     substrate_util: Optional[dict] = None
 ) -> float:
     return 1.0 if success else -0.5
+
+
+def _reward_r2c_ac(
+    success: bool, vnr: nx.Graph, done: bool, accepted: list, rejected: list,
+    step_cost: Optional[float] = None, accepted_costs: Optional[List[float]] = None,
+    substrate_util: Optional[dict] = None
+) -> float:
+    """Revenue/Cost per step + terminal acceptance-rate bonus.
+
+    Per step:
+      - Accept: R/C ratio of this VNR.
+      - Reject: small penalty scaled by how many VNRs are already rejected
+                relative to total (inline AR pressure).
+
+    Terminal step bonus:
+      ar * 3.0 + rc * 2.0   (lighter than LONGTERM to avoid over-weighting
+                              terminal; PPO's GAE spreads credit naturally).
+    """
+    n_total = len(accepted) + len(rejected) + (0 if success else 0)  # current counts
+    # per-step component
+    if success:
+        step_r = _real_rc(vnr, step_cost)
+    else:
+        # Scale rejection penalty by current inline AR: more rejects → bigger penalty
+        n_rej_so_far = len(rejected)
+        inline_ar = len(accepted) / (n_total + 1e-9)
+        step_r = -_revenue(vnr) * (0.1 + 0.2 * (1.0 - inline_ar))
+
+    # terminal bonus
+    if done:
+        total_rev = sum(_revenue(v) for v, _, _ in accepted)
+        if accepted_costs and len(accepted_costs) == len(accepted):
+            total_cost = sum(accepted_costs)
+        else:
+            total_cost = sum(_demand_cost(v) for v, _, _ in accepted)
+        n_all = len(accepted) + len(rejected)
+        ar = len(accepted) / (n_all + 1e-9)
+        rc = total_rev / (total_cost + 1e-6)
+        step_r += ar * 3.0 + rc * 2.0
+
+    return step_r
 
 
 def _reward_revenue(
@@ -148,9 +199,10 @@ def _reward_rejection_scaled(
 # ---------------------------------------------------------------------------
 
 _REWARD_FNS = {
-    RewardMode.SIMPLE:   _reward_simple,
-    RewardMode.REVENUE:  _reward_revenue,
-    RewardMode.LONGTERM: _reward_longterm,
+    RewardMode.SIMPLE:           _reward_simple,
+    RewardMode.R2C_AC:           _reward_r2c_ac,
+    RewardMode.REVENUE:          _reward_revenue,
+    RewardMode.LONGTERM:         _reward_longterm,
     RewardMode.CONGESTION_AWARE: _reward_congestion_aware,
     RewardMode.REJECTION_SCALED: _reward_rejection_scaled,
 }

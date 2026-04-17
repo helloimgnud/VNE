@@ -217,17 +217,27 @@ class ProgressiveDeploymentWrapper(gymnasium.Wrapper):
 
     def _level_up(self):
         self.level += 1
-        
-        # Determine reward mode phase shift (Phase C3)
-        if self.level == 3:
+
+        # ----------------------------------------------------------------
+        # Reward-mode curriculum
+        # ----------------------------------------------------------------
+        # Lvl 1 → SIMPLE   (binary accept/reject; set at env init)
+        # Lvl 2 → R2C_AC   (R/C per step + AR-weighted terminal bonus)
+        # Lvl 4 → REVENUE  (pure R/C per step — tighter efficiency pressure)
+        # Lvl 6 → CONGESTION_AWARE (R/C scaled by substrate fill)
+        # Lvl 8 → REJECTION_SCALED (heavy, fill-proportional reject penalty)
+        # Lvl 10→ LONGTERM  (full per-step revenue + large terminal bonus)
+        if self.level == 2:
+            self.inner_env.reward_mode = RewardMode.R2C_AC
+        elif self.level == 4:
             self.inner_env.reward_mode = RewardMode.REVENUE
-        elif self.level == 5:
+        elif self.level == 6:
             self.inner_env.reward_mode = RewardMode.CONGESTION_AWARE
-        elif self.level == 7:
+        elif self.level == 8:
             self.inner_env.reward_mode = RewardMode.REJECTION_SCALED
-        elif self.level == 9:
+        elif self.level == 10:
             self.inner_env.reward_mode = RewardMode.LONGTERM
-        
+
         # Scaling Strategy: Alternate between increasing batch size and increasing demand
         if self.level % 2 == 0 and self.current_batch_size < self.cfg.max_batch_size:
             self.current_batch_size += self.cfg.level_up_batch_delta

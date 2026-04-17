@@ -52,7 +52,7 @@ class ProgressivePPOConfig:
     grad_clip:       float = 0.5
 
     # Reward
-    reward_mode:     str   = "simple"  # simple -> revenue -> longterm automatically
+    reward_mode:     str   = "simple"  # starts simple → r2c_ac (lvl2) → revenue (lvl4) → longterm (lvl10)
 
     # Network
     use_batch_context: bool = True
@@ -355,23 +355,42 @@ class ProgressiveTrainer:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--total-steps", type=int, default=1_000_000)
-    parser.add_argument("--device", type=str, default="auto")
-    parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    # Budget
+    parser.add_argument("--total-steps",     type=int,   default=1_000_000)
+    parser.add_argument("--device",          type=str,   default="auto")
+    parser.add_argument("--resume",          type=str,   default=None,
+                        help="Path to checkpoint to resume from")
     # VNR size range
-    parser.add_argument("--vnr-min-nodes", type=int, default=2,
+    parser.add_argument("--vnr-min-nodes",   type=int,   default=2,
                         help="Minimum virtual nodes per VNR (inclusive)")
-    parser.add_argument("--vnr-max-nodes", type=int, default=8,
+    parser.add_argument("--vnr-max-nodes",   type=int,   default=8,
                         help="Maximum virtual nodes per VNR (inclusive)")
+    # Network / environment scale  ← NEW
+    parser.add_argument("--substrate-nodes", type=int,   default=50,
+                        help="Number of nodes in the substrate network")
+    parser.add_argument("--batch-size-env",  type=int,   default=10,
+                        help="Number of VNRs per episode batch (initial curriculum size)")
+    # PPO throughput  ← NEW
+    parser.add_argument("--n-steps",         type=int,   default=512,
+                        help="Timesteps collected per rollout (larger = more GPU memory used at update)")
+    parser.add_argument("--mini-batch",      type=int,   default=64,
+                        help="Mini-batch size for gradient updates")
+    parser.add_argument("--n-epochs",        type=int,   default=10,
+                        help="Gradient epochs per rollout")
     args = parser.parse_args()
 
     cfg = ProgressivePPOConfig(
-        total_timesteps = args.total_steps,
-        device          = args.device,
-        resume_path     = args.resume,
-        vnr_min_nodes   = args.vnr_min_nodes,
-        vnr_max_nodes   = args.vnr_max_nodes,
+        total_timesteps  = args.total_steps,
+        device           = args.device,
+        resume_path      = args.resume,
+        vnr_min_nodes    = args.vnr_min_nodes,
+        vnr_max_nodes    = args.vnr_max_nodes,
+        substrate_nodes  = args.substrate_nodes,
+        batch_size_env   = args.batch_size_env,
+        n_steps          = args.n_steps,
+        batch_size       = args.mini_batch,
+        n_epochs         = args.n_epochs,
     )
     trainer = ProgressiveTrainer(cfg)
     trainer.train()
