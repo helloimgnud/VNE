@@ -74,11 +74,24 @@ def _demand_cost(vnr: nx.Graph) -> float:
 
 
 def _real_rc(vnr: nx.Graph, real_step_cost: Optional[float]) -> float:
-    """Compute per-step R/C ratio using real embedding cost."""
+    """Compute per-step R/C ratio, clamped to [0, 1].
+
+    Theoretical bound
+    -----------------
+    Revenue = Σ(cpu_v) + Σ(bw_e)  [VNR demands]
+    Cost    = Σ(cpu_v × node_cost) + Σ(bw_e × path_len × bw_cost)
+
+    With node_cost = bw_cost = 1.0 (default), the minimum cost equals
+    revenue (1-hop direct mapping). Extra hops push cost above revenue,
+    so R/C ∈ (0, 1] and R/C = 1.0 is the optimal (no-hop) embedding.
+    We clamp to [0, 1] to cap any floating-point overshoot.
+    """
     rev = _revenue(vnr)
     if real_step_cost is not None and real_step_cost > 1e-9:
-        return rev / real_step_cost
-    return rev / _demand_cost(vnr)
+        rc = rev / real_step_cost
+    else:
+        rc = rev / _demand_cost(vnr)
+    return min(rc, 1.0)   # clamp: 1.0 = optimal, <1 = extra hop overhead
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +173,22 @@ def _reward_longterm(
     step_cost: Optional[float] = None, accepted_costs: Optional[List[float]] = None,
     substrate_util: Optional[dict] = None
 ) -> float:
-    step_r = _revenue(vnr) if success else 0.0
+    """Normalised long-term reward — all signals bounded to [0, 1].
+
+    Per-step signal  ∈ [0, 1]:
+      Accept → r2c_norm = R/C clamped to [0, 1]
+      Reject → 0.0  (no penalty; terminal AR signal handles throughput)
+
+    Terminal bonus  ∈ [0, 1]  (only on last step of episode):
+      ar ∈ [0, 1]  — acceptance ratio
+      rc ∈ [0, 1]  — episode-level R/C (clamped)
+      bonus = 0.6 · ar  +  0.4 · rc   (convex blend, tuneable)
+
+    Return range: [0, 2]  (per-step ≤ 1, terminal bonus ≤ 1)
+    Critic targets stay bounded → v_loss stays in a sane range.
+    """
+    # Per-step: use normalised R/C as step signal
+    step_r = _real_rc(vnr, step_cost) if success else 0.0
 
     if done:
         total_rev = sum(_revenue(v) for v, _, _ in accepted)
@@ -168,11 +196,22 @@ def _reward_longterm(
             total_cost = sum(accepted_costs)
         else:
             total_cost = sum(_demand_cost(v) for v, _, _ in accepted)
-            
+
+        # Guard: accepted_costs must be in sync with accepted list.
+        # If this fires, the env forgot to append a real cost on acceptance.
+        assert accepted_costs is None or len(accepted_costs) == len(accepted), (
+            f"accepted_costs length {len(accepted_costs)} != accepted length {len(accepted)}. "
+            "Real embedding costs are out of sync — reward will be wrong."
+        )
+
         n_total = len(accepted) + len(rejected)
-        ar = len(accepted) / (n_total + 1e-9)
+        ar = len(accepted) / (n_total + 1e-9)          # ∈ [0, 1]
         rc = total_rev / (total_cost + 1e-6)
-        step_r += ar * 5.0 + rc * 2.0
+        rc = min(rc, 1.0)                               # clamp ∈ [0, 1]
+
+        # Convex terminal bonus ∈ [0, 1]: weight AR more (throughput matters)
+        terminal_bonus = 0.6 * ar + 0.4 * rc
+        step_r += terminal_bonus
 
     return step_r
 

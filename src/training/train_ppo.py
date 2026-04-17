@@ -60,7 +60,7 @@ class PPOConfig:
     """All hyper-parameters for the PPO training run."""
 
     # Training budget
-    total_timesteps: int   = 500_000
+    total_timesteps: int   = 100_000
     n_steps:         int   = 512    # timesteps per rollout
     batch_size:      int   = 64     # mini-batch size for gradient update
     n_epochs:        int   = 10     # gradient epochs per rollout
@@ -75,7 +75,7 @@ class PPOConfig:
     grad_clip:       float = 0.5
 
     # Reward
-    reward_mode:     str   = "revenue"  # simple | revenue | longterm
+    reward_mode:     str   = "longterm"  # simple | revenue | longterm
 
     # Network
     use_batch_context: bool = True   # Phase 2: enable BatchContextEncoder
@@ -86,14 +86,14 @@ class PPOConfig:
     # VNR size range: each VNR in a batch independently samples its node count
     # uniformly from [vnr_min_nodes, vnr_max_nodes], giving a varied dataset.
     vnr_min_nodes:    int   = 2
-    vnr_max_nodes:    int   = 8
+    vnr_max_nodes:    int   = 10
     fixed_substrate:  bool  = False
     hpso_particles:   int   = 20
-    hpso_iterations:  int   = 30
+    hpso_iterations:  int   = 10
 
     # Logging / checkpointing
-    log_every:  int = 10_000      # log every N timesteps
-    save_every: int = 50_000
+    log_every:  int = 512      # log every N timesteps
+    save_every: int = 512
     save_dir:   str = "checkpoints"
     run_name:   str = "ppo_phase2"
     device:     str = "auto"
@@ -474,7 +474,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--gae-lambda",   type=float, default=0.95)
     p.add_argument("--clip",         type=float, default=0.2)
     p.add_argument("--ent-coef",     type=float, default=0.01)
-    p.add_argument("--reward",       type=str,   default="revenue",
+    p.add_argument("--reward",       type=str,   default="longterm",
                    choices=["simple", "revenue", "longterm"])
     p.add_argument("--no-ctx",       action="store_true",
                    help="Disable BatchContextEncoder")
@@ -486,8 +486,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--vnr-max-nodes", type=int,  default=8,
                    help="Maximum virtual nodes per VNR (inclusive)")
     p.add_argument("--hpso-iter",    type=int,   default=30)
-    p.add_argument("--log-every",    type=int,   default=10_000)
-    p.add_argument("--save-every",   type=int,   default=50_000)
+    p.add_argument("--log-every",    type=int,   default=512)
+    p.add_argument("--save-every",   type=int,   default=512)
     p.add_argument("--save-dir",     type=str,   default="checkpoints")
     p.add_argument("--run-name",     type=str,   default="ppo_phase2")
     p.add_argument("--device",       type=str,   default="auto")

@@ -245,7 +245,7 @@ class VNEOrderingEnv(gymnasium.Env):
         from src.evaluation.eval import revenue_of_vnr
         total_rev  = sum(revenue_of_vnr(v) for v, _, _ in self.accepted)
         total_cost = sum(self.accepted_costs) if self.accepted_costs else 1e-6
-        rc  = total_rev / total_cost
+        rc  = min(total_rev / total_cost, 1.0)   # clamp: 1.0 = optimal (no extra hops)
 
         from src.utils.graph_utils import substrate_utilisation
         u = substrate_utilisation(self.substrate)

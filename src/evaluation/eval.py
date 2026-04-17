@@ -8,13 +8,19 @@ def revenue_of_vnr(vnr_graph):
 
 def cost_of_vnr(vnr_graph, mapping=None, link_paths=None):
     """
-    Lightweight cost proxy for a VNR.
+    Revenue proxy — equals the real embedding cost ONLY for 1-hop direct paths.
 
-    If mapping / link_paths are not provided (or substrate costs are unavailable),
-    falls back to summing raw CPU + BW demands — a useful training signal even
-    without the full substrate-aware cost.
+    Returns
+    -------
+    float  =  Σ(cpu_v)  +  Σ(bw_e)
 
-    For substrate-aware cost use cost_of_embedding() instead.
+    This is equivalent to the true embedding cost when every virtual link maps
+    to a single substrate hop with node_cost=1 and bw_cost=1 (the best case).
+    For multi-hop paths the real cost is HIGHER than this value, so using this
+    as a cost estimate gives an OPTIMISTIC (too-high) R/C ratio.
+
+    ⚠ Do NOT use this as a real-cost estimate during evaluation.
+       Use cost_of_embedding(mapping, link_paths, vnr, substrate) instead.
     """
     cpu_cost = sum(vnr_graph.nodes[n].get('cpu', 0.0) for n in vnr_graph.nodes())
     bw_cost  = sum(vnr_graph.edges[e].get('bw',  0.0) for e in vnr_graph.edges())
