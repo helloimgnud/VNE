@@ -262,8 +262,8 @@ class BaseExperiment(ABC):
                 import os
                 
                 # Check for either the step1024 or final checkpoint depending on existence
-                ckpt_final = "checkpoints/ppo_progressive_final.pt"
-                ckpt_step = "checkpoints/ppo_progressive_step1024.pt"
+                ckpt_final = "checkpoints/ppo_phase2_final.pt"
+                ckpt_step = "checkpoints/ppo_phase2_step1024.pt"
                 
                 ckpt_to_load = ckpt_final if os.path.exists(ckpt_final) else ckpt_step
                 

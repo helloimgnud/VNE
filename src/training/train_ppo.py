@@ -78,10 +78,11 @@ class PPOConfig:
     reward_mode:     str   = "longterm"  # simple | revenue | longterm
 
     # Network
-    use_batch_context: bool = True   # Phase 2: enable BatchContextEncoder
+    use_batch_context: bool = True   # Phase enable BatchContextEncoder
 
     # Environment
-    substrate_nodes:  int   = 50
+    sub_min_nodes:    int   = 40
+    sub_max_nodes:    int   = 90
     batch_size_env:   int   = 10
     # VNR size range: each VNR in a batch independently samples its node count
     # uniformly from [vnr_min_nodes, vnr_max_nodes], giving a varied dataset.
@@ -160,7 +161,8 @@ class PPOTrainerScheduler:
 
         # Environment
         substrate_fn, batch_fn = make_env_fns(
-            substrate_nodes = cfg.substrate_nodes,
+            sub_min_nodes   = cfg.sub_min_nodes,
+            sub_max_nodes   = cfg.sub_max_nodes,
             batch_size      = cfg.batch_size_env,
             vnr_min_nodes   = cfg.vnr_min_nodes,
             vnr_max_nodes   = cfg.vnr_max_nodes,
@@ -371,7 +373,7 @@ class PPOTrainerScheduler:
         print(f"[PPO] Starting training on {self.device}")
         print(f"  total_steps={cfg.total_timesteps}, n_steps={cfg.n_steps}, "
               f"batch={cfg.batch_size}, epochs={cfg.n_epochs}")
-        print(f"  reward={cfg.reward_mode}, substrate={cfg.substrate_nodes}, "
+        print(f"  reward={cfg.reward_mode}, substrate_nodes=[{cfg.sub_min_nodes}, {cfg.sub_max_nodes}], "
               f"vnr_batch={cfg.batch_size_env}")
         print()
 
@@ -478,7 +480,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    choices=["simple", "revenue", "longterm"])
     p.add_argument("--no-ctx",       action="store_true",
                    help="Disable BatchContextEncoder")
-    p.add_argument("--sub-nodes",    type=int,   default=50)
+    p.add_argument("--sub-min-nodes", type=int,  default=40,
+                   help="Minimum total substrate nodes (inclusive)")
+    p.add_argument("--sub-max-nodes", type=int,  default=90,
+                   help="Maximum total substrate nodes (inclusive)")
     p.add_argument("--vnr-batch",    type=int,   default=10)
     # VNR size range flags (replace old single --vnr-nodes)
     p.add_argument("--vnr-min-nodes", type=int,  default=2,
@@ -510,7 +515,8 @@ if __name__ == "__main__":
         ent_coef          = args.ent_coef,
         reward_mode       = args.reward,
         use_batch_context = not args.no_ctx,
-        substrate_nodes   = args.sub_nodes,
+        sub_min_nodes     = args.sub_min_nodes,
+        sub_max_nodes     = args.sub_max_nodes,
         batch_size_env    = args.vnr_batch,
         vnr_min_nodes     = args.vnr_min_nodes,
         vnr_max_nodes     = args.vnr_max_nodes,

@@ -41,7 +41,8 @@ from src.generators_v2.vnr_generator import generate_single_vnr
 # ---------------------------------------------------------------------------
 
 def make_substrate_fn(
-    num_nodes:    int   = 50,
+    min_nodes:    int   = 40,
+    max_nodes:    int   = 90,
     num_domains:  int   = 4,
     p_intra:      float = 0.5,
     p_inter:      float = 0.05,
@@ -73,11 +74,14 @@ def make_substrate_fn(
     def _fn() -> nx.Graph:
         if fixed_seed is not None:
             seed = fixed_seed
+            rng = random.Random(seed)
+            n_nodes = rng.randint(min_nodes, max_nodes)
         else:
             seed = random.randint(0, 2 ** 31 - 1)
+            n_nodes = random.randint(min_nodes, max_nodes)
         call_counter[0] += 1
         return generate_substrate(
-            num_nodes_total = num_nodes,
+            num_nodes_total = n_nodes,
             num_domains     = num_domains,
             p_intra         = p_intra,
             p_inter         = p_inter,
@@ -152,7 +156,8 @@ def make_batch_fn(
 # ---------------------------------------------------------------------------
 
 def make_env_fns(
-    substrate_nodes: int   = 50,
+    sub_min_nodes:   int   = 40,
+    sub_max_nodes:   int   = 90,
     batch_size:      int   = 10,
     # VNR size range — each VNR in a batch gets an independent node count drawn
     # uniformly from [vnr_min_nodes, vnr_max_nodes].
@@ -170,7 +175,8 @@ def make_env_fns(
 
     Parameters
     ----------
-    substrate_nodes : size of the substrate network
+    sub_min_nodes   : minimum total substrate nodes (inclusive)
+    sub_max_nodes   : maximum total substrate nodes (inclusive)
     batch_size      : number of VNRs per episode
     vnr_min_nodes   : minimum virtual nodes per VNR (inclusive)
     vnr_max_nodes   : maximum virtual nodes per VNR (inclusive)
@@ -186,7 +192,8 @@ def make_env_fns(
     substrate_fn, batch_fn
     """
     substrate_fn = make_substrate_fn(
-        num_nodes  = substrate_nodes,
+        min_nodes  = sub_min_nodes,
+        max_nodes  = sub_max_nodes,
         cpu_range  = sub_cpu_range,
         bw_range   = sub_bw_range,
         fixed_seed = substrate_seed if fixed_substrate else None,
