@@ -190,6 +190,7 @@ class PPOTrainerScheduler:
 
         # Current episode state
         self._obs, _ = self.env.reset()
+        self.current_ep_reward = 0.0
 
     # ------------------------------------------------------------------
     # Rollout collection
@@ -217,6 +218,8 @@ class PPOTrainerScheduler:
 
             next_obs, reward, done, _, info = self.env.step(action.item())
 
+            self.current_ep_reward += reward
+
             self.buffer.obs.append(obs)
             self.buffer.actions.append(action)
             self.buffer.log_probs.append(log_prob)
@@ -228,10 +231,12 @@ class PPOTrainerScheduler:
                 # Log metrics for completed episode
                 ep_info = self.env.episode_summary()
                 global_step = getattr(self, "global_step", 0) + len(self.buffer)
+                self.writer.add_scalar("Metrics/EpisodeReward", self.current_ep_reward, global_step)
                 self.writer.add_scalar("Metrics/AcceptanceRate", ep_info["acc_rate"], global_step)
                 self.writer.add_scalar("Metrics/RevenueCostRatio", ep_info["rc_ratio"], global_step)
                 self.writer.add_scalar("Metrics/SubstrateCpuUtil", ep_info.get("cpu_util", 0.0), global_step)
                 self.writer.add_scalar("Metrics/SubstrateBwUtil", ep_info.get("bw_util", 0.0), global_step)
+                self.current_ep_reward = 0.0
 
             if done:
                 self._obs, _ = self.env.reset()
@@ -401,6 +406,7 @@ class PPOTrainerScheduler:
             self.writer.add_scalar("Train/PolicyLoss", update_stats["policy_loss"], self.global_step)
             self.writer.add_scalar("Train/ValueLoss", update_stats["value_loss"], self.global_step)
             self.writer.add_scalar("Train/Entropy", update_stats["entropy"], self.global_step)
+            self.writer.flush()
 
             if self.global_step % cfg.log_every < cfg.n_steps:
                 elapsed = time.time() - t0
