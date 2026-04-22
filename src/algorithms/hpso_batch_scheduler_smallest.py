@@ -1,6 +1,6 @@
 """
-src/algorithms/hpso_batch_scheduler_greedy.py
-=============================================
+src/algorithms/hpso_batch_scheduler_smallest.py
+===============================================
 Greedy version of the batch scheduler.
 Sorts VNRs in ascending order based on their revenue
 (smallest revenue first).
@@ -24,7 +24,7 @@ def _revenue_sort_smallest_first(vnr_list: list) -> List[int]:
         reverse=False,
     )
 
-def hpso_embed_batch_greedy_smallest_first(
+def hpso_embed_batch_smallest(
     substrate,
     batch,
     particles:    int   = 20,
@@ -51,13 +51,13 @@ def hpso_embed_batch_greedy_smallest_first(
 
     order = _revenue_sort_smallest_first(vnr_list)
     if verbose:
-        print(f"[HPSO Greedy] Smallest-revenue-first ordering: {order}")
+        print(f"[HPSO Smallest] Smallest-revenue-first ordering: {order}")
 
     for step, idx in enumerate(order):
         vnr = vnr_list[idx]
 
         if verbose:
-            print(f"[HPSO Greedy] Step {step + 1}/{len(order)}: VNR[{idx}]")
+            print(f"[HPSO Smallest] Step {step + 1}/{len(order)}: VNR[{idx}]")
 
         result = hpso_embed(
             substrate_graph=substrate,
@@ -81,4 +81,4 @@ def hpso_embed_batch_greedy_smallest_first(
 
 # Alias for backward compatibility if replacing standard embed_batch signatures
 def hpso_embed_batch(substrate, batch, **kwargs):
-    return hpso_embed_batch_greedy_smallest_first(substrate, batch, **kwargs)
+    return hpso_embed_batch_smallest(substrate, batch, **kwargs)

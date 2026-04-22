@@ -223,7 +223,10 @@ class BaseExperiment(ABC):
         from src.algorithms.discrete_hpso import hpso_embed as discrete_hpso_embed
         from src.algorithms.hpso_priority import hpso_embed as hpso_priority_embed
         from src.algorithms.parallel_hpso_priority import embed_batch as parallel_hpso_priority_embed
-        from src.algorithms.hpso_batch_rl import hpso_embed_batch
+        from src.algorithms.hpso_batch import hpso_embed_batch
+        from src.algorithms.hpso_batch_scheduler_smallest import hpso_embed_batch as hpso_embed_batch_smallest
+        from src.algorithms.hpso_batch_scheduler_biggest import hpso_embed_batch as hpso_embed_batch_biggest
+
         algorithm_map = {
             'baseline': baseline_embed_batch,
             'd_vine_sp': d_vine_sp_embed,
@@ -235,7 +238,9 @@ class BaseExperiment(ABC):
             "discrete_hpso": discrete_hpso_embed,
             "hpso_priority": hpso_priority_embed,
             "parallel_hpso_priority": parallel_hpso_priority_embed,
-            "hpso_batch": hpso_embed_batch
+            "hpso_batch": hpso_embed_batch,
+            "hpso_batch_scheduler_smallest": hpso_embed_batch_smallest,
+            "hpso_batch_scheduler_biggest": hpso_embed_batch_biggest
         }
         
         if algo_name not in algorithm_map:
@@ -248,7 +253,7 @@ class BaseExperiment(ABC):
         from src.simulation.simulator import VNRSimulator, BatchedVNRSimulator
         # from src.integration.ordered_pipeline import build_ordered_pipeline
 
-        if algo_name in ['baseline', 'proposed', 'proposed_KL', 'batch_hpso', 'parallel_hpso_priority', 'hpso_batch', 'hpso_batch_scheduler']:
+        if algo_name in ['baseline', 'proposed', 'proposed_KL', 'batch_hpso', 'parallel_hpso_priority', 'hpso_batch', 'hpso_batch_scheduler', 'hpso_batch_scheduler_smallest', 'hpso_batch_scheduler_biggest']:
             simulator = BatchedVNRSimulator(
                 substrate, 
                 window_size=10, 

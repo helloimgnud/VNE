@@ -35,8 +35,8 @@ def hpso_embed_batch(
     else:
         vnr_list = batch
 
-    # Sort VNRs by revenue in descending order (bigger revenue first)
-    vnr_list.sort(key=lambda x: revenue_of_vnr(x), reverse=True)
+    # Natural arrival order (no sorting)
+    # vnr_list is kept in its original sequence
 
     for i, vnr in enumerate(vnr_list):
         if verbose:
