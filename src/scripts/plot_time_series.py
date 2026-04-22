@@ -137,86 +137,109 @@ def main():
     df_avg = df.groupby(group_cols).mean(numeric_only=True).reset_index()
 
     # -----------------------------------------------------------------------
-    # Validate requested metrics
+    # Determine Metric Sets to Plot
     # -----------------------------------------------------------------------
-    # Normalise metric order
+    # If the user ran with defaults, we override to produce two separate files
     if set(args.metrics) == {"avg_revenue", "avg_cost", "acceptance_ratio"}:
-        args.metrics = ["acceptance_ratio", "avg_cost", "avg_revenue"]
+        # Ensure revenue_cost_ratio exists
+        if "revenue_cost_ratio" not in df_avg.columns:
+            # We calculate Revenue/Cost to match the reward objective
+            df_avg["revenue_cost_ratio"] = df_avg["avg_revenue"] / df_avg["avg_cost"].replace(0, pd.NA)
+
+        metric_sets = {
+            "ar_rc": ["acceptance_ratio", "revenue_cost_ratio"],
+            "cost_rev": ["avg_cost", "avg_revenue"]
+        }
+    else:
+        # Fallback if user passed explicit non-default metrics
+        custom_mets = [m for m in args.metrics if m in df_avg.columns]
+        if not custom_mets:
+            print(f"Error: None of the requested metrics ({args.metrics}) were found in the CSV.")
+            return
+        metric_sets = {"custom": custom_mets}
 
     metric_display_names = {
         "acceptance_ratio": "Acceptance Rate",
         "avg_cost":         "Average Cost",
         "avg_revenue":      "Average Revenue",
+        "revenue_cost_ratio": "Revenue/Cost Ratio",
+        "cost_revenue_ratio": "Cost/Revenue Ratio",
     }
 
-    available_metrics = [m for m in args.metrics if m in df_avg.columns]
-    if not available_metrics:
-        print(f"Error: None of the requested metrics ({args.metrics}) were found in the CSV.")
-        return
-
-    # -----------------------------------------------------------------------
-    # Plot — hue = algorithm (colour), style = dataset (line style + marker)
-    # -----------------------------------------------------------------------
-    num_metrics = len(available_metrics)
-    fig, axes = plt.subplots(num_metrics, 1, figsize=(13, 5 * num_metrics), sharex=True)
-    if num_metrics == 1:
-        axes = [axes]
-
     sns.set_theme(style="whitegrid")
-
     n_datasets = df_avg["dataset"].nunique()
 
-    for ax, metric in zip(axes, available_metrics):
-        display_name = metric_display_names.get(metric, metric.replace("_", " ").title())
-        print(f"Plotting {metric} ({display_name}) — grouped by dataset...")
-
-        sns.lineplot(
-            data=df_avg,
-            x=args.x_axis,
-            y=metric,
-            hue="algorithm",   # colour  = algorithm
-            style="dataset",   # pattern = dataset configuration
-            markers=True,
-            dashes=True,
-            markersize=8,
-            linewidth=2.5,
-            ax=ax,
-        )
-
-        ax.set_title(f"Simulation Progression of {display_name}", fontsize=16, fontweight="bold")
-        ax.set_ylabel(display_name, fontsize=13)
-        ax.set_xlabel(args.x_axis.replace("_", " ").title(), fontsize=13)
-
-        # Subtitle showing exactly what was averaged
-        n_eval_runs = df["eval_run"].nunique() if "eval_run" in df.columns else 1
-        ax.set_title(
-            f"Simulation Progression of {display_name}\n"
-            f"({n_datasets} dataset(s) plotted separately, runs averaged per dataset: {n_eval_runs})",
-            fontsize=14, fontweight="bold"
-        )
-
-        ax.legend(
-            title="Algorithm (colour) / Dataset (style)",
-            loc="upper left",
-            bbox_to_anchor=(1, 1),
-            fontsize=9,
-        )
-
-    plt.tight_layout()
-
     # -----------------------------------------------------------------------
-    # Save
+    # Plot sets — hue = algorithm, style = dataset
     # -----------------------------------------------------------------------
-    if args.save_path:
-        os.makedirs(os.path.dirname(os.path.abspath(args.save_path)), exist_ok=True)
-        plt.savefig(args.save_path, dpi=args.dpi, bbox_inches="tight")
-        print(f"\nSaved plot to {args.save_path}")
-    else:
+    for set_name, metrics in metric_sets.items():
+        if not metrics:
+            continue
+            
+        num_metrics = len(metrics)
+        fig, axes = plt.subplots(num_metrics, 1, figsize=(13, 5 * num_metrics), sharex=True)
+        if num_metrics == 1:
+            axes = [axes]
+            
+        for ax, metric in zip(axes, metrics):
+            display_name = metric_display_names.get(metric, metric.replace("_", " ").title())
+            print(f"Plotting {metric} ({display_name}) — grouped by dataset...")
+
+            sns.lineplot(
+                data=df_avg,
+                x=args.x_axis,
+                y=metric,
+                hue="algorithm",   # colour  = algorithm
+                style="dataset",   # pattern = dataset configuration
+                markers=True,
+                dashes=True,
+                markersize=8,
+                linewidth=2.5,
+                ax=ax,
+            )
+
+            ax.set_title(f"Simulation Progression of {display_name}", fontsize=16, fontweight="bold")
+            ax.set_ylabel(display_name, fontsize=13)
+            ax.set_xlabel(args.x_axis.replace("_", " ").title(), fontsize=13)
+
+            # Subtitle showing exactly what was averaged
+            n_eval_runs = df["eval_run"].nunique() if "eval_run" in df.columns else 1
+            ax.set_title(
+                f"Simulation Progression of {display_name}\n"
+                f"({n_datasets} dataset(s) plotted separately, runs averaged per dataset: {n_eval_runs})",
+                fontsize=14, fontweight="bold"
+            )
+
+            ax.legend(
+                title="Algorithm (colour) / Dataset (style)",
+                loc="upper left",
+                bbox_to_anchor=(1, 1),
+                fontsize=9,
+            )
+
+        plt.tight_layout()
+
+        # -----------------------------------------------------------------------
+        # Save each set separately
+        # -----------------------------------------------------------------------
         base_name = args.csv_file.replace(".csv", "")
         ds_suffix = f"_ds{args.dataset_filter.replace('=','-').replace('/','-')}" if args.dataset_filter else ""
-        default_save = f"{base_name}_plotted_{args.x_axis}{ds_suffix}.png"
-        plt.savefig(default_save, dpi=args.dpi, bbox_inches="tight")
-        print(f"\nSaved plot to {default_save}")
+        
+        if args.save_path and set_name == "custom":
+            save_dest = args.save_path
+        else:
+            suffix_map = {"ar_rc": "_performance_metrics", "cost_rev": "_financial_metrics", "custom": "_custom"}
+            file_suffix = suffix_map.get(set_name, "")
+            
+            if args.save_path:
+                base, ext = os.path.splitext(args.save_path)
+                save_dest = f"{base}{file_suffix}{ext}"
+            else:
+                save_dest = f"{base_name}_plotted_{args.x_axis}{file_suffix}{ds_suffix}.png"
+                
+        os.makedirs(os.path.dirname(os.path.abspath(save_dest)), exist_ok=True)
+        plt.savefig(save_dest, dpi=args.dpi, bbox_inches="tight")
+        print(f"\nSaved {set_name} plot to {save_dest}")
 
     try:
         plt.show()

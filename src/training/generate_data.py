@@ -98,7 +98,8 @@ def make_substrate_fn(
 # ---------------------------------------------------------------------------
 
 def make_batch_fn(
-    batch_size:   int   = 10,
+    batch_min:    int   = 5,
+    batch_max:    int   = 15,
     min_vnodes:   int   = 2,          # minimum VNR node count per request
     max_vnodes:   int   = 8,          # maximum VNR node count per request
     edge_prob:    float = 0.5,
@@ -111,11 +112,13 @@ def make_batch_fn(
 
     Each VNR in the batch independently samples its node count from
     ``[min_vnodes, max_vnodes]``, so a single batch (and therefore a single
-    dataset) contains VNRs of **varied sizes**.
+    dataset) contains VNRs of **varied sizes**. The number of VNRs in the batch
+    is also dynamically sampled between ``batch_min`` and ``batch_max``.
 
     Parameters
     ----------
-    batch_size  : number of VNRs per batch
+    batch_min   : minimum number of VNRs per batch
+    batch_max   : maximum number of VNRs per batch
     min_vnodes  : minimum number of virtual nodes per VNR (inclusive)
     max_vnodes  : maximum number of virtual nodes per VNR (inclusive)
     edge_prob   : Erdős–Rényi edge probability
@@ -137,7 +140,8 @@ def make_batch_fn(
             random.seed(fixed_seed)
 
         batch = []
-        for _ in range(batch_size):
+        n_vnrs = random.randint(batch_min, batch_max)
+        for _ in range(n_vnrs):
             n = random.randint(min_vnodes, max_vnodes)
             vnr = generate_single_vnr(
                 num_nodes  = n,
@@ -158,7 +162,8 @@ def make_batch_fn(
 def make_env_fns(
     sub_min_nodes:   int   = 40,
     sub_max_nodes:   int   = 90,
-    batch_size:      int   = 10,
+    vnr_batch_min:   int   = 5,
+    vnr_batch_max:   int   = 15,
     # VNR size range — each VNR in a batch gets an independent node count drawn
     # uniformly from [vnr_min_nodes, vnr_max_nodes].
     vnr_min_nodes:   int   = 2,
@@ -177,7 +182,8 @@ def make_env_fns(
     ----------
     sub_min_nodes   : minimum total substrate nodes (inclusive)
     sub_max_nodes   : maximum total substrate nodes (inclusive)
-    batch_size      : number of VNRs per episode
+    vnr_batch_min   : minimum number of VNRs per episode
+    vnr_batch_max   : maximum number of VNRs per episode
     vnr_min_nodes   : minimum virtual nodes per VNR (inclusive)
     vnr_max_nodes   : maximum virtual nodes per VNR (inclusive)
     sub_cpu_range   : substrate CPU capacity range
@@ -199,7 +205,8 @@ def make_env_fns(
         fixed_seed = substrate_seed if fixed_substrate else None,
     )
     batch_fn = make_batch_fn(
-        batch_size = batch_size,
+        batch_min  = vnr_batch_min,
+        batch_max  = vnr_batch_max,
         min_vnodes = vnr_min_nodes,
         max_vnodes = vnr_max_nodes,
         cpu_range  = vnr_cpu_range,

@@ -83,7 +83,8 @@ class PPOConfig:
     # Environment
     sub_min_nodes:    int   = 40
     sub_max_nodes:    int   = 90
-    batch_size_env:   int   = 10
+    vnr_batch_min:    int   = 5
+    vnr_batch_max:    int   = 15
     # VNR size range: each VNR in a batch independently samples its node count
     # uniformly from [vnr_min_nodes, vnr_max_nodes], giving a varied dataset.
     vnr_min_nodes:    int   = 2
@@ -163,7 +164,8 @@ class PPOTrainerScheduler:
         substrate_fn, batch_fn = make_env_fns(
             sub_min_nodes   = cfg.sub_min_nodes,
             sub_max_nodes   = cfg.sub_max_nodes,
-            batch_size      = cfg.batch_size_env,
+            vnr_batch_min   = cfg.vnr_batch_min,
+            vnr_batch_max   = cfg.vnr_batch_max,
             vnr_min_nodes   = cfg.vnr_min_nodes,
             vnr_max_nodes   = cfg.vnr_max_nodes,
             fixed_substrate = cfg.fixed_substrate,
@@ -374,7 +376,7 @@ class PPOTrainerScheduler:
         print(f"  total_steps={cfg.total_timesteps}, n_steps={cfg.n_steps}, "
               f"batch={cfg.batch_size}, epochs={cfg.n_epochs}")
         print(f"  reward={cfg.reward_mode}, substrate_nodes=[{cfg.sub_min_nodes}, {cfg.sub_max_nodes}], "
-              f"vnr_batch={cfg.batch_size_env}")
+              f"vnr_batch=[{cfg.vnr_batch_min}, {cfg.vnr_batch_max}]")
         print()
 
         t0           = time.time()
@@ -484,7 +486,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Minimum total substrate nodes (inclusive)")
     p.add_argument("--sub-max-nodes", type=int,  default=90,
                    help="Maximum total substrate nodes (inclusive)")
-    p.add_argument("--vnr-batch",    type=int,   default=10)
+    p.add_argument("--vnr-batch-min", type=int,  default=5,
+                   help="Minimum number of VNRs per batch (inclusive)")
+    p.add_argument("--vnr-batch-max", type=int,  default=15,
+                   help="Maximum number of VNRs per batch (inclusive)")
     # VNR size range flags (replace old single --vnr-nodes)
     p.add_argument("--vnr-min-nodes", type=int,  default=2,
                    help="Minimum virtual nodes per VNR (inclusive)")
@@ -517,7 +522,8 @@ if __name__ == "__main__":
         use_batch_context = not args.no_ctx,
         sub_min_nodes     = args.sub_min_nodes,
         sub_max_nodes     = args.sub_max_nodes,
-        batch_size_env    = args.vnr_batch,
+        vnr_batch_min     = args.vnr_batch_min,
+        vnr_batch_max     = args.vnr_batch_max,
         vnr_min_nodes     = args.vnr_min_nodes,
         vnr_max_nodes     = args.vnr_max_nodes,
         hpso_iterations   = args.hpso_iter,
