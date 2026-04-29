@@ -78,7 +78,7 @@ class PPOConfig:
     reward_mode:     str   = "longterm"  # simple | revenue | longterm
 
     # Network
-    use_batch_context: bool = True   # Phase enable BatchContextEncoder
+    use_batch_context: bool = False   # Phase enable BatchContextEncoder
 
     # Environment
     sub_min_nodes:    int   = 40
@@ -102,6 +102,27 @@ class PPOConfig:
 
     # Checkpoint to resume from (Optional)
     load_checkpoint: Optional[str] = None
+
+    # ── Stateful substrate (distribution alignment) ──────────────────────────
+    stateful_substrate:          bool  = False
+    # Master switch. When False (default), all fields below are ignored
+    # and training is identical to the original.
+
+    ss_warmup_episodes:          int   = 50
+    # Episodes using fresh substrate before depletion kicks in.
+
+    ss_vnr_lifetime_episodes:    int   = 5
+    # How many episodes a committed VNR occupies live_substrate.
+    # Calibrate: K = round(avg_lifetime / (avg_inter_arrival * avg_batch_size))
+    # Default config (lifetime~25, inter_arrival~1, batch~10): K=3
+    # fig6 dataset (Pareto lifetime~65, batch~10): K=7
+
+    ss_overflow_cpu_threshold:   float = 0.88
+    # CPU utilisation fraction above which live_substrate is force-reset.
+
+    ss_regenerate_on_overflow:   bool  = True
+    # True  = generate a new random substrate on overflow (default).
+    # False = restore the initial substrate's resources.
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +201,31 @@ class PPOTrainerScheduler:
             reward_mode  = cfg.reward_mode,
         )
 
+        # ── Stateful substrate wrapper (optional) ────────────────────────────
+        self.stateful_wrapper = None
+        if cfg.stateful_substrate:
+            from src.training.stateful_substrate import (
+                StatefulSubstrateWrapper, StatefulSubstrateConfig,
+            )
+            ss_cfg = StatefulSubstrateConfig(
+                enabled                          = True,
+                warmup_episodes                  = cfg.ss_warmup_episodes,
+                vnr_lifetime_episodes            = cfg.ss_vnr_lifetime_episodes,
+                overflow_cpu_threshold           = cfg.ss_overflow_cpu_threshold,
+                regenerate_substrate_on_overflow = cfg.ss_regenerate_on_overflow,
+            )
+            self.stateful_wrapper = StatefulSubstrateWrapper(
+                env          = self.env,
+                substrate_fn = substrate_fn,   # original fn from make_env_fns()
+                cfg          = ss_cfg,
+            )
+            print(
+                f"[PPO] StatefulSubstrateWrapper ENABLED "
+                f"(warmup={ss_cfg.warmup_episodes}, "
+                f"K={ss_cfg.vnr_lifetime_episodes}, "
+                f"overflow={ss_cfg.overflow_cpu_threshold:.0%})"
+            )
+
         os.makedirs(cfg.save_dir, exist_ok=True)
         self.buffer  = _RolloutBuffer()
         self.history: List[dict] = []
@@ -188,7 +234,9 @@ class PPOTrainerScheduler:
         tb_dir = os.path.join("runs", cfg.run_name)
         self.writer = SummaryWriter(log_dir=tb_dir)
 
-        # Current episode state
+        # Current episode state — fire on_episode_start for episode 1
+        if self.stateful_wrapper is not None:
+            self.stateful_wrapper.on_episode_start()
         self._obs, _ = self.env.reset()
         self.current_ep_reward = 0.0
 
@@ -206,6 +254,9 @@ class PPOTrainerScheduler:
 
             if not obs["vnr_list"]:
                 # Episode ended between steps; reset
+                # Hook 1A — on_episode_start before reset (empty vnr_list path)
+                if self.stateful_wrapper is not None:
+                    self.stateful_wrapper.on_episode_start()
                 self._obs, _ = self.env.reset()
                 obs          = self._obs
 
@@ -217,6 +268,10 @@ class PPOTrainerScheduler:
                 action, log_prob, _, value = self.ac.get_action_and_value(obs_dev)
 
             next_obs, reward, done, _, info = self.env.step(action.item())
+
+            # Hook 2 — on_step after every env.step()
+            if self.stateful_wrapper is not None:
+                self.stateful_wrapper.on_step(action.item(), next_obs, reward, done, info)
 
             self.current_ep_reward += reward
 
@@ -236,9 +291,24 @@ class PPOTrainerScheduler:
                 self.writer.add_scalar("Metrics/RevenueCostRatio", ep_info["rc_ratio"], global_step)
                 self.writer.add_scalar("Metrics/SubstrateCpuUtil", ep_info.get("cpu_util", 0.0), global_step)
                 self.writer.add_scalar("Metrics/SubstrateBwUtil", ep_info.get("bw_util", 0.0), global_step)
+                # Stateful substrate telemetry
+                if self.stateful_wrapper is not None:
+                    live = self.stateful_wrapper.get_live_util()
+                    self.writer.add_scalar(
+                        "StatefulSubstrate/LiveCpuUtil", live['live_cpu_util'], global_step
+                    )
+                    self.writer.add_scalar(
+                        "StatefulSubstrate/LiveBwUtil", live['live_bw_util'], global_step
+                    )
+                    self.writer.add_scalar(
+                        "StatefulSubstrate/CommittedVNRs", live['committed_vnrs'], global_step
+                    )
                 self.current_ep_reward = 0.0
 
             if done:
+                # Hook 1B — on_episode_start before reset (done=True path)
+                if self.stateful_wrapper is not None:
+                    self.stateful_wrapper.on_episode_start()
                 self._obs, _ = self.env.reset()
             else:
                 self._obs = next_obs
@@ -509,6 +579,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--device",       type=str,   default="auto")
     p.add_argument("--load-checkpoint", type=str, default=None,
                    help="Path to checkpoint to resume training from")
+    # ── Stateful substrate flags ─────────────────────────────────────────────
+    p.add_argument("--stateful-substrate",    action="store_true",
+                   help="Enable stateful substrate wrapper for distribution alignment")
+    p.add_argument("--ss-warmup",             type=int,   default=50,
+                   help="Episodes with fresh substrate before depletion kicks in")
+    p.add_argument("--ss-lifetime-episodes",  type=int,   default=5,
+                   help="Episodes a committed VNR occupies live_substrate (K)")
+    p.add_argument("--ss-overflow-threshold", type=float, default=0.88,
+                   help="CPU util fraction above which live_substrate is force-reset")
     return p
 
 
@@ -538,7 +617,11 @@ if __name__ == "__main__":
         save_dir          = args.save_dir,
         run_name          = args.run_name,
         device            = args.device,
-        load_checkpoint   = args.load_checkpoint,
+        load_checkpoint          = args.load_checkpoint,
+        stateful_substrate        = args.stateful_substrate,
+        ss_warmup_episodes        = args.ss_warmup,
+        ss_vnr_lifetime_episodes  = args.ss_lifetime_episodes,
+        ss_overflow_cpu_threshold = args.ss_overflow_threshold,
     )
     trainer = PPOTrainerScheduler(cfg)
     trainer.train()
