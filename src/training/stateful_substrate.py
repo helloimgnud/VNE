@@ -165,7 +165,14 @@ def _consume_resources(substrate: nx.Graph, record: VNRRecord) -> None:
         substrate.nodes[snode]['cpu'] = new_val
 
     # Link resources
-    for (u, v), path in record.link_paths.items():
+    for u, v in record.vnr.edges():
+        if (u, v) in record.link_paths:
+            path = record.link_paths[(u, v)]
+        elif (v, u) in record.link_paths:
+            path = record.link_paths[(v, u)]
+        else:
+            continue
+
         bw_req = float(record.vnr.edges[u, v].get('bw', 0.0))
         for i in range(len(path) - 1):
             a, b = path[i], path[i + 1]
@@ -212,7 +219,14 @@ def _release_resources(substrate: nx.Graph, record: VNRRecord) -> None:
         substrate.nodes[snode]['cpu'] = min(cpu_cap, current + cpu_req)
 
     # Link resources
-    for (u, v), path in record.link_paths.items():
+    for u, v in record.vnr.edges():
+        if (u, v) in record.link_paths:
+            path = record.link_paths[(u, v)]
+        elif (v, u) in record.link_paths:
+            path = record.link_paths[(v, u)]
+        else:
+            continue
+
         bw_req = float(record.vnr.edges[u, v].get('bw', 0.0))
         for i in range(len(path) - 1):
             a, b = path[i], path[i + 1]
