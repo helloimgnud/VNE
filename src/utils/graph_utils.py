@@ -96,7 +96,7 @@ def release_node(substrate, sub_node, cpu_amount):
 def reserve_path(substrate, path, bw_amount):
     """
     Reserve bandwidth resources on a path.
-    
+
     Args:
         substrate: NetworkX substrate graph
         path: List of nodes representing the path
@@ -105,13 +105,16 @@ def reserve_path(substrate, path, bw_amount):
     for i in range(len(path) - 1):
         a = path[i]
         b = path[i + 1]
-        substrate.edges[a, b]['bw'] -= bw_amount
+        if substrate.has_edge(a, b):
+            substrate.edges[a, b]['bw'] -= bw_amount
+        elif substrate.has_edge(b, a):
+            substrate.edges[b, a]['bw'] -= bw_amount
 
 
 def release_path(substrate, path, bw_amount):
     """
     Release bandwidth resources on a path.
-    
+
     Args:
         substrate: NetworkX substrate graph
         path: List of nodes representing the path
@@ -120,7 +123,10 @@ def release_path(substrate, path, bw_amount):
     for i in range(len(path) - 1):
         a = path[i]
         b = path[i + 1]
-        substrate.edges[a, b]['bw'] += bw_amount
+        if substrate.has_edge(a, b):
+            substrate.edges[a, b]['bw'] += bw_amount
+        elif substrate.has_edge(b, a):
+            substrate.edges[b, a]['bw'] += bw_amount
 
 
 def cpu_free_list(substrate):

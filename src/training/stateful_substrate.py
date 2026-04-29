@@ -132,7 +132,61 @@ class VNRRecord:
 # Module-level resource helpers
 # ---------------------------------------------------------------------------
 
-def _consume_resources(substrate: nx.Graph, record: VNRRecord) -> None:
+def _check_resources(substrate: nx.Graph, record: VNRRecord) -> bool:
+    """
+    Pre-validate that substrate has sufficient CPU and BW to honour the
+    VNR record WITHOUT deducting anything.
+
+    Returns True if all resources are available, False otherwise.
+    Called by _consume_resources as a guard; also useful for debugging.
+    """
+    # Node check
+    for vnode, snode in record.mapping.items():
+        if snode not in substrate.nodes:
+            return False
+        cpu_req = float(record.vnr.nodes[vnode].get('cpu', 0.0))
+        current = float(substrate.nodes[snode].get('cpu', 0.0))
+        if current < cpu_req:
+            logger.warning(
+                "_check_resources: CPU insufficient on snode %s "
+                "(avail=%.2f, req=%.2f) for VNR obj_id=%d",
+                snode, current, cpu_req, record.vnr_object_id,
+            )
+            return False
+
+    # Edge check
+    for u, v in record.vnr.edges():
+        if (u, v) in record.link_paths:
+            path = record.link_paths[(u, v)]
+        elif (v, u) in record.link_paths:
+            path = record.link_paths[(v, u)]
+        else:
+            continue
+
+        bw_req = float(record.vnr.edges[u, v].get('bw', 0.0))
+        for i in range(len(path) - 1):
+            a, b = path[i], path[i + 1]
+            if substrate.has_edge(a, b):
+                current_bw = float(substrate.edges[a, b].get('bw', 0.0))
+            elif substrate.has_edge(b, a):
+                current_bw = float(substrate.edges[b, a].get('bw', 0.0))
+            else:
+                logger.warning(
+                    "_check_resources: substrate edge (%s,%s) missing for VNR obj_id=%d",
+                    a, b, record.vnr_object_id,
+                )
+                return False
+            if current_bw < bw_req:
+                logger.warning(
+                    "_check_resources: BW insufficient on edge (%s,%s) "
+                    "(avail=%.2f, req=%.2f) for VNR obj_id=%d",
+                    a, b, current_bw, bw_req, record.vnr_object_id,
+                )
+                return False
+    return True
+
+
+def _consume_resources(substrate: nx.Graph, record: VNRRecord) -> bool:
     """
     Deduct CPU and BW from substrate nodes/edges per the VNR mapping.
 
@@ -140,29 +194,28 @@ def _consume_resources(substrate: nx.Graph, record: VNRRecord) -> None:
       node: 'cpu' (available)
       edge: 'bw'  (available)
 
-    Clamps to 0 rather than going negative. Logs a warning if clamping
-    fires, which indicates floating-point drift between env.substrate
-    and live_substrate.
+    Pre-validates resource availability before ANY deduction so the
+    substrate is never left in a partially-committed inconsistent state.
+
+    Returns
+    -------
+    True  — resources successfully deducted.
+    False — insufficient resources; substrate is NOT modified.
     """
+    # --- Pre-flight check: bail out early if resources are insufficient ---
+    if not _check_resources(substrate, record):
+        logger.warning(
+            "_consume_resources: pre-flight FAILED for VNR obj_id=%d; "
+            "skipping commit to keep substrate consistent.",
+            record.vnr_object_id,
+        )
+        return False
+
+    # --- Safe to deduct (all checks passed) ---
     # Node resources
     for vnode, snode in record.mapping.items():
-        if snode not in substrate.nodes:
-            logger.warning(
-                "_consume_resources: snode %s not in substrate (VNR obj_id=%d); skipping",
-                snode, record.vnr_object_id,
-            )
-            continue
         cpu_req = float(record.vnr.nodes[vnode].get('cpu', 0.0))
-        current = float(substrate.nodes[snode].get('cpu', 0.0))
-        new_val = current - cpu_req
-        if new_val < 0.0:
-            logger.warning(
-                "_consume_resources: CPU would go negative on snode %s "
-                "(current=%.2f, req=%.2f); clamping to 0",
-                snode, current, cpu_req,
-            )
-            new_val = 0.0
-        substrate.nodes[snode]['cpu'] = new_val
+        substrate.nodes[snode]['cpu'] = float(substrate.nodes[snode].get('cpu', 0.0)) - cpu_req
 
     # Link resources
     for u, v in record.vnr.edges():
@@ -177,22 +230,11 @@ def _consume_resources(substrate: nx.Graph, record: VNRRecord) -> None:
         for i in range(len(path) - 1):
             a, b = path[i], path[i + 1]
             if substrate.has_edge(a, b):
-                current_bw = float(substrate.edges[a, b].get('bw', 0.0))
-                new_bw = current_bw - bw_req
-                if new_bw < 0.0:
-                    logger.warning(
-                        "_consume_resources: BW would go negative on edge (%s,%s) "
-                        "(current=%.2f, req=%.2f); clamping to 0",
-                        a, b, current_bw, bw_req,
-                    )
-                    new_bw = 0.0
-                substrate.edges[a, b]['bw'] = new_bw
-            elif substrate.has_edge(b, a):  # undirected: try reverse
-                current_bw = float(substrate.edges[b, a].get('bw', 0.0))
-                new_bw = current_bw - bw_req
-                if new_bw < 0.0:
-                    new_bw = 0.0
-                substrate.edges[b, a]['bw'] = new_bw
+                substrate.edges[a, b]['bw'] = float(substrate.edges[a, b].get('bw', 0.0)) - bw_req
+            elif substrate.has_edge(b, a):
+                substrate.edges[b, a]['bw'] = float(substrate.edges[b, a].get('bw', 0.0)) - bw_req
+
+    return True
 
 
 def _release_resources(substrate: nx.Graph, record: VNRRecord) -> None:
@@ -426,16 +468,25 @@ class StatefulSubstrateWrapper:
             vnr_object_id  = obj_id,
         )
 
-        _consume_resources(self.live_substrate, record)
-        self.committed_vnrs.append(record)
-        self._committed_ids_this_episode.add(obj_id)
-
-        logger.debug(
-            "Committed VNR obj_id=%d at episode %d (expires ep %d); "
-            "total committed=%d",
-            obj_id, record.commit_episode, record.expiry_episode,
-            len(self.committed_vnrs),
-        )
+        committed = _consume_resources(self.live_substrate, record)
+        if committed:
+            self.committed_vnrs.append(record)
+            self._committed_ids_this_episode.add(obj_id)
+            logger.debug(
+                "Committed VNR obj_id=%d at episode %d (expires ep %d); "
+                "total committed=%d",
+                obj_id, record.commit_episode, record.expiry_episode,
+                len(self.committed_vnrs),
+            )
+        else:
+            # Resource pre-flight failed — do NOT track this VNR so its
+            # resources are never double-released on expiry either.
+            logger.warning(
+                "on_step: VNR obj_id=%d SKIPPED (infeasible on live_substrate "
+                "at episode %d). live_substrate may be more depleted than "
+                "env.substrate; this VNR will not be tracked for expiry.",
+                obj_id, self.episode_count,
+            )
 
     # ------------------------------------------------------------------
     # Telemetry
