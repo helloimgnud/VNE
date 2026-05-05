@@ -254,9 +254,9 @@ def _release_resources(substrate: nx.Graph, record: VNRRecord) -> None:
             continue
         cpu_req = float(record.vnr.nodes[vnode].get('cpu', 0.0))
         current = float(substrate.nodes[snode].get('cpu', 0.0))
-        # Use max_cpu as capacity cap; fall back to current + req if not set
+        # Use max_cpu or cpu_total as capacity cap; fall back to current + req if not set
         cpu_cap = float(substrate.nodes[snode].get(
-            'max_cpu', current + cpu_req
+            'max_cpu', substrate.nodes[snode].get('cpu_total', current + cpu_req)
         ))
         substrate.nodes[snode]['cpu'] = min(cpu_cap, current + cpu_req)
 
@@ -275,13 +275,13 @@ def _release_resources(substrate: nx.Graph, record: VNRRecord) -> None:
             if substrate.has_edge(a, b):
                 current_bw = float(substrate.edges[a, b].get('bw', 0.0))
                 bw_cap = float(substrate.edges[a, b].get(
-                    'max_bw', current_bw + bw_req
+                    'max_bw', substrate.edges[a, b].get('bw_total', current_bw + bw_req)
                 ))
                 substrate.edges[a, b]['bw'] = min(bw_cap, current_bw + bw_req)
             elif substrate.has_edge(b, a):
                 current_bw = float(substrate.edges[b, a].get('bw', 0.0))
                 bw_cap = float(substrate.edges[b, a].get(
-                    'max_bw', current_bw + bw_req
+                    'max_bw', substrate.edges[b, a].get('bw_total', current_bw + bw_req)
                 ))
                 substrate.edges[b, a]['bw'] = min(bw_cap, current_bw + bw_req)
 

@@ -153,10 +153,10 @@ def random_seed(seed):
     np.random.seed(seed)
 
 def substrate_utilisation(substrate) -> dict:
-    total_cpu = sum(d.get('max_cpu', d.get('cpu', 1e-9)) for n, d in substrate.nodes(data=True))
+    total_cpu = sum(d.get('max_cpu', d.get('cpu_total', d.get('cpu', 1e-9))) for n, d in substrate.nodes(data=True))
     avail_cpu = sum(d.get('cpu', 0) for n, d in substrate.nodes(data=True))
     
-    total_bw = sum(d.get('max_bw', d.get('bw', 1e-9)) for u, v, d in substrate.edges(data=True))
+    total_bw = sum(d.get('max_bw', d.get('bw_total', d.get('bw', 1e-9))) for u, v, d in substrate.edges(data=True))
     avail_bw = sum(d.get('bw', 0) for u, v, d in substrate.edges(data=True))
     
     return {
