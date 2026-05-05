@@ -23,8 +23,8 @@ At the start of each time window:
 
 | Dimension | Training (v2) | Inference |
 |---|---|---|
-| Substrate source | Fixed dataset or generate on-the-fly (flag) | Live substrate |
-| VNR source | From pre-generated dataset or on-the-fly | Real time-window |
+| Substrate source | Fixed dataset | Live substrate |
+| VNR source | From pre-generated dataset | Real time-window |
 | VNR expiry | Processed at the start of each window (same as inference) | Processed at the start of each window |
 | Episode boundary | **1 epoch = 1 episode = all N VNRs** | Continuous stream |
 | Substrate reset | Reset to fresh **after each epoch** | No reset (continuous) |
@@ -86,10 +86,9 @@ A trajectory = the full sequence of steps within one episode:
 ```python
 class DataMode(str, enum.Enum):
     PREGENERATED = "pregenerated"   # Use an existing dataset file
-    ON_THE_FLY   = "on_the_fly"     # Generate data when training starts
 ```
 
-**Mode A — Pre-generated dataset** (recommended for serious training runs):
+**Mode A — Pre-generated dataset** (the only supported mode):
 ```
 dataset/rl_training/
 ├── substrate.json
@@ -98,12 +97,7 @@ dataset/rl_training/
 - **One run = one single dataset** (1 substrate + 1 VNR stream)
 - To train on multiple datasets → re-run with a different `--train-dir`
 - Loaded once at startup; reused each epoch (substrate resets to fresh, VNR stream stays fixed)
-- To increase diversity: use Mode B (on-the-fly) or run multiple times with different seeds/datasets
-
-**Mode B — On-the-fly generation**:
-- Each epoch calls `generate_substrate()` and `generate_vnr_stream_v2()` to produce fresh data
-- No file I/O required beforehand
-- Used for quick experiments, unit tests, and ablation studies
+- To increase diversity: run multiple times with different seeds/datasets
 
 ### 1.2 VNR Stream Format
 
@@ -137,8 +131,7 @@ class VNEEnvironmentV2(gymnasium.Env):
     Leave events are processed at the start of each time window (same as inference).
 
     Data modes:
-      - PREGENERATED: load from dataset_paths (list of dicts)
-      - ON_THE_FLY:   generate on reset() using substrate_fn/batch_fn
+      - PREGENERATED: load from dataset_paths (list of nx.Graph)
     """
 ```
 
@@ -147,19 +140,13 @@ class VNEEnvironmentV2(gymnasium.Env):
 ```python
 def __init__(
     self,
-    # --- Data mode selection (choose one) ---
+    # --- Data mode ---
     data_mode: DataMode = DataMode.PREGENERATED,
 
-    # Mode A: Pre-generated dataset — one dataset per run
+    # Pre-generated dataset — one dataset per run
     substrate_path: Optional[str] = None,   # path to substrate.json
     vnr_path: Optional[str] = None,         # path to vnr_stream.json
     # To train on a different dataset → re-run the script with a different path
-
-    # Mode B: On-the-fly generation
-    substrate_fn: Optional[Callable] = None,
-    # callable() → nx.Graph (called each episode on reset)
-    vnr_stream_fn: Optional[Callable] = None,
-    # callable() → list[dict] (generates the full stream for one episode)
 
     # Simulation parameters
     window_size: int = 50,
@@ -172,17 +159,13 @@ def __init__(
 
 **Validation inside `__init__`:**
 ```python
-if data_mode == DataMode.PREGENERATED:
-    assert substrate_path is not None and vnr_path is not None, \
-        "PREGENERATED mode requires substrate_path and vnr_path"
-    # Loaded once at startup
-    self._substrate_original = load_substrate_from_json(substrate_path)
-    self._vnr_stream_raw = load_vnr_stream_from_json(vnr_path)
-    # Each epoch's reset() will copy substrate_original and reuse vnr_stream_raw
-elif data_mode == DataMode.ON_THE_FLY:
-    assert substrate_fn is not None and vnr_stream_fn is not None
-    self.substrate_fn = substrate_fn
-    self.vnr_stream_fn = vnr_stream_fn
+assert data_mode == DataMode.PREGENERATED, "Only PREGENERATED mode is supported"
+assert substrate_path is not None and vnr_path is not None, \
+    "substrate_path and vnr_path are required"
+# Loaded once at startup
+self._substrate_original = load_substrate_from_json(substrate_path)
+self._vnr_stream_raw = load_vnr_stream_from_json(vnr_path)
+# Each epoch's reset() will copy substrate_original and reuse vnr_stream_raw
 ```
 
 ### 2.3 `reset()` — Start a New Episode
@@ -200,9 +183,6 @@ def reset(self, seed=None, options=None):
       - vnr_stream: reuses self._vnr_stream_raw (immutable, unchanged each epoch)
       - Each training epoch iterates over the SAME dataset; diversity comes from stochastic HPSO
 
-    ON_THE_FLY mode:
-      - Calls substrate_fn() and vnr_stream_fn() to generate new data for each episode
-
     Flow:
       1. Load (substrate, vnr_stream) according to data_mode
       2. substrate_working = copy(substrate_original)  ← fresh copy
@@ -215,13 +195,9 @@ def reset(self, seed=None, options=None):
     super().reset(seed=seed)
 
     # --- Load data ---
-    if self.data_mode == DataMode.PREGENERATED:
-        # Substrate: fresh copy each epoch; VNR stream: immutable
-        substrate_raw = self._substrate_original
-        vnr_stream = self._vnr_stream_raw
-    else:  # ON_THE_FLY
-        substrate_raw = self.substrate_fn()
-        vnr_stream = self.vnr_stream_fn()
+    # Substrate: fresh copy each epoch; VNR stream: immutable
+    substrate_raw = self._substrate_original
+    vnr_stream = self._vnr_stream_raw
 
     # --- Setup episode state ---
     self.substrate = copy_substrate(substrate_raw)
@@ -254,7 +230,7 @@ def _partition_into_windows(self, vnr_stream: list) -> list[list]:
     """
     Partitions the VNR stream into time windows.
 
-    Returns list[list[dict]], where each element is the list of VNRs in one window.
+    Returns list[list[nx.Graph]], where each element is the list of VNRs in one window.
     Window i: arrival_time ∈ [i * window_size, (i+1) * window_size)
 
     Note: Empty windows are retained (to handle their corresponding leave events).
@@ -263,12 +239,12 @@ def _partition_into_windows(self, vnr_stream: list) -> list[list]:
     if not vnr_stream:
         return [[]]
 
-    max_time = max(v["arrival_time"] for v in vnr_stream)
+    max_time = max(v.graph["arrival_time"] for v in vnr_stream)
     n_windows = int(max_time / self.window_size) + 1
 
     windows = [[] for _ in range(n_windows)]
     for vnr in vnr_stream:
-        w_idx = int(vnr["arrival_time"] / self.window_size)
+        w_idx = int(vnr.graph["arrival_time"] / self.window_size)
         windows[w_idx].append(vnr)
 
     # Prune trailing empty windows (but keep at least 1)
@@ -304,8 +280,8 @@ def _advance_to_window(self, window_idx: int):
     for emb in self.active_embeddings:
         vnr, mapping, link_paths, expiry = emb
         if expiry < window_start:
-            self._release_embedding(vnr, mapping, link_paths)
-            # Resources returned to substrate
+            release_vnr_embedding(self.substrate, vnr, mapping, link_paths)
+            # Resources returned to substrate safely (handles undirected edge directions correctly)
         else:
             still_active.append(emb)
     self.active_embeddings = still_active
@@ -319,16 +295,21 @@ def _advance_to_window(self, window_idx: int):
     # --- Step 3: Build vnr_queue (unprocessed VNRs in this window) ---
     # Drop VNR if it has waited too long (arrival_time + max_queue_delay < window_start)
     self.vnr_queue = []
-    for vnr_dict in new_vnrs:
-        wait_time = window_start - vnr_dict["arrival_time"]
+    for vnr in new_vnrs:
+        wait_time = window_start - vnr.graph["arrival_time"]
         if wait_time <= self.max_queue_delay:
-            self.vnr_queue.append(self._parse_vnr(vnr_dict))
+            self.vnr_queue.append(vnr)
         # else: drop (expired in queue before being processed)
 
     self.window_expiry_time = window_end
 ```
 
 ### 2.6 `step()` — Execute an Action
+
+```python
+# Required import (top of environment_v2.py)
+from src.evaluation.eval import cost_of_embedding
+```
 
 ```python
 def step(self, action: int):
@@ -356,7 +337,7 @@ def step(self, action: int):
         expiry = vnr.graph["arrival_time"] + vnr.graph["lifetime"]
         self.active_embeddings.append((vnr, mapping, link_paths, expiry))
         self.episode_accepted.append((vnr, mapping, link_paths))
-        cost = _compute_embedding_cost(mapping, link_paths, vnr, self.substrate)
+        cost = cost_of_embedding(mapping, link_paths, vnr, self.substrate)
         self.episode_accepted_costs.append(cost)
         success = True
     else:
@@ -401,31 +382,33 @@ def _check_done_and_advance(self) -> bool:
 
 ### 2.7 Resource Lifecycle
 
-```python
-def _release_embedding(self, vnr, mapping, link_paths):
-    """Restores substrate resources when a VNR's lifetime expires."""
-    for v_node, s_node in mapping.items():
-        cpu_req = vnr.nodes[v_node]["cpu"]
-        self.substrate.nodes[s_node]["cpu"] += cpu_req
+The manual `_release_embedding` implementation is removed. Iterating over paths manually on
+undirected graphs causes `KeyError`s or double-accounting when the edge direction key doesn't
+match how NetworkX stored it — this is the root cause of negative-bandwidth resource depletion.
 
-    for (u, v), path in link_paths.items():
-        bw_req = vnr.edges[u, v]["bw"]
-        for i in range(len(path) - 1):
-            a, b = path[i], path[i+1]
-            self.substrate.edges[a, b]["bw"] += bw_req
-```
-
-### 2.8 `reset_to_start()` — For Eval Env Only
+Instead, use the existing robust utility from `src.utils.graph_utils`, which handles edge
+direction correctly and mirrors exactly how `fast_hpso.py` deducts resources:
 
 ```python
-def reset_to_start(self):
-    """
-    Rewinds pool_idx to 0.
-    Should only be called by the trainer on self.eval_env before each evaluate().
-    NEVER call this on self.train_env.
-    """
-    self.pool_idx = 0
+# In environment_v2.py — top-level imports
+from src.utils.graph_utils import release_vnr_embedding
+
+# Inside _advance_to_window(self, window_idx: int) — Step 1: Expire VNRs
+still_active = []
+for emb in self.active_embeddings:
+    vnr, mapping, link_paths, expiry = emb
+    if expiry < window_start:
+        release_vnr_embedding(self.substrate, vnr, mapping, link_paths)
+        # Resources returned to substrate safely
+    else:
+        still_active.append(emb)
+self.active_embeddings = still_active
 ```
+
+`_release_embedding` is removed entirely from the class. All call sites in
+`_advance_to_window` are replaced with the direct call to `release_vnr_embedding`.
+
+
 
 ### 2.9 `episode_summary()` — End-of-Episode Summary
 
@@ -500,23 +483,22 @@ value instead of the true terminal bonus.
 class PPOTrainerV2:
 
     def __init__(self, cfg: PPOConfigV2):
-        # Train env: only passes train replicas
+        import os
+        # Train env: completely separate, uses train dataset
         self.train_env = VNEEnvironmentV2(
-            data_mode=DataMode(cfg.data_mode),
-            dataset_paths=cfg.dataset_paths,       # Mode A
-            substrate_fn=cfg.substrate_fn,          # Mode B
-            vnr_stream_fn=cfg.vnr_stream_fn,        # Mode B
+            data_mode=DataMode.PREGENERATED,
+            substrate_path=os.path.join(cfg.train_dir, "substrate.json"),
+            vnr_path=os.path.join(cfg.train_dir, "vnr_stream.json"),
             window_size=cfg.window_size,
-            ...
+            # ...
         )
-        # Eval env: completely separate, only passes eval replicas
+        # Eval env: completely separate, uses eval dataset
         self.eval_env = VNEEnvironmentV2(
-            data_mode=DataMode(cfg.data_mode),
-            dataset_paths=cfg.eval_paths,          # eval replicas differ from train
-            substrate_fn=cfg.substrate_fn,
-            vnr_stream_fn=cfg.vnr_stream_fn,
+            data_mode=DataMode.PREGENERATED,
+            substrate_path=os.path.join(cfg.eval_dir, "substrate.json"),
+            vnr_path=os.path.join(cfg.eval_dir, "vnr_stream.json"),
             window_size=cfg.window_size,
-            ...
+            # ...
         )
         ...
 
@@ -640,17 +622,16 @@ def evaluate(self, n_episodes: int = None) -> dict:
     """
     Greedy rollout on self.eval_env.
     self.train_env is not touched at any point during this function.
-
-    eval_env.reset_to_start() ensures evaluation always runs on the same input.
     """
     n_episodes = n_episodes or self.cfg.eval_episodes
     self.model.eval()
-    self.eval_env.reset_to_start()   # pool_idx=0, eval env only
 
     all_ars, all_rcs, all_rewards = [], [], []
 
     for ep in range(n_episodes):
-        obs, _ = self.eval_env.reset()   # Advance pool_idx (round-robin eval replicas)
+        # We evaluate on the EXACT SAME EVAL DATASET n_episodes times
+        # to average out HPSO's stochasticity for a smoother/more meaningful plot.
+        obs, _ = self.eval_env.reset()
         ep_reward = 0.0
         done = False
 
@@ -683,20 +664,10 @@ def evaluate(self, n_episodes: int = None) -> dict:
 ```python
 @dataclass
 class PPOConfigV2:
-    # --- Data mode ---
-    data_mode: str = "pregenerated"   # "pregenerated" | "on_the_fly"
-
-    # Mode A: Pre-generated dataset paths
-    dataset_paths: list = field(default_factory=list)
-    eval_paths: list    = field(default_factory=list)
-
-    # Mode B: On-the-fly generation params
-    sub_min_nodes: int  = 40
-    sub_max_nodes: int  = 90
-    vnr_min_nodes: int  = 2
-    vnr_max_nodes: int  = 8
-    num_vnrs_per_episode: int = 200   # N VNRs per on-the-fly episode
-    window_size: int    = 50
+    # --- Data paths ---
+    train_dir: str = ""
+    eval_dir: str = ""
+    window_size: int = 50
 
     # --- Training ---
     num_epochs: int     = 500         # Number of episodes to train
@@ -780,7 +751,6 @@ class PPOConfigV2:
 | `Substrate/CpuUtilization` | `1 - avail_cpu/total_cpu` at end of episode |
 | `Substrate/BwUtilization` | `1 - avail_bw/total_bw` at end of episode |
 | `Substrate/ActiveEmbeddingsPeak` | Number of VNRs holding resources at peak |
-| `Dataset/PoolIdx` | Which replica is currently in use |
 | `Dataset/EpochWindow` | window_idx / total_windows at end of epoch |
 
 ---
@@ -815,19 +785,17 @@ class GNNActorCriticV2(nn.Module):
 
 ### `environment_v2.py` (~400 lines)
 
-- [ ] `DataMode` enum: `PREGENERATED` | `ON_THE_FLY`
+- [ ] `DataMode` enum: `PREGENERATED` only
 - [ ] `VNEEnvironmentV2(gymnasium.Env)`:
-  - [ ] `__init__`: accepts `data_mode` flag, validates correct params for each mode
+  - [ ] `__init__`: validates PREGENERATED mode params, loads substrate and VNR stream once
   - [ ] `reset()`: loads data per mode, fresh substrate copy, partitions windows, advances to window 0
   - [ ] `step(action)`: pops VNR from queue, runs HPSO, computes reward, calls `_check_done_and_advance()`
   - [ ] `_partition_into_windows()`: splits VNR stream into list of lists by arrival_time
-  - [ ] `_advance_to_window(idx)`: expires lifetime-ended VNRs, loads new VNRs, drops expired-in-queue
+  - [ ] `_advance_to_window(idx)`: expires lifetime-ended VNRs via `release_vnr_embedding`, loads new VNRs, drops expired-in-queue
   - [ ] `_check_done_and_advance()`: advances window when queue is empty, skips empty windows, returns done
-  - [ ] `_release_embedding()`: restores resources when a VNR expires
   - [ ] `_get_obs()`: builds PyG Data from substrate + remaining vnr_queue
   - [ ] `_compute_reward()`: pluggable reward computation
   - [ ] `episode_summary()`: AR, R/C, n_accepted, n_rejected
-  - [ ] `reset_to_start()`: used only for eval_env
 
 ### `train_ppo_v2.py` (~500 lines)
 
@@ -844,44 +812,44 @@ class GNNActorCriticV2(nn.Module):
 
 ### `generate_datasets.py` — RL branch
 
-- [ ] Loop over `num_replicas`, create `replica_{i}/` for each
-- [ ] Call `generate_rl_training_dataset()` with `replica_idx` to set the correct output path
-- [ ] `generate_rl_training_dataset()` signature accepts all required params: `replica_idx`, `substrate_nodes_range`, `num_vnrs_range`, `vnr_min_nodes`, `vnr_max_nodes`, `seed`
+- [ ] Update `generate_rl_training_dataset()` call in `src/scripts/generate_datasets.py` to parse and pass `args.num_vnrs`, `args.substrate_nodes`, `args.vnr_min_nodes`, `args.vnr_max_nodes`.
+- [ ] Ensure it creates a single `substrate.json` and `vnr_stream.json`.
 
 ---
 
 ## Part 8 — Data Preparation & Run Commands
 
 ```bash
-# 1. Generate training data (5 replicas)
+# 1. Generate ONE training dataset
+#    → written to dataset/train/rl_training/substrate.json
+#                             dataset/train/rl_training/vnr_stream.json
 python -m src.scripts.generate_datasets \
     --experiments rl \
     --num-vnrs 1000 \
-    --substrate-nodes 60,100 \
+    --substrate-nodes 80 \
     --vnr-min-nodes 2 \
     --vnr-max-nodes 10 \
-    --num-replicas 5 \
     --base-seed 42 \
-    --output-dir dataset/rl_training/train \
+    --output-dir dataset/train \
     --force
 
-# 2. Generate held-out eval data (2 replicas, different seed)
+# 2. Generate ONE held-out eval dataset (different seed)
+#    → written to dataset/eval/rl_training/substrate.json
+#                            dataset/eval/rl_training/vnr_stream.json
 python -m src.scripts.generate_datasets \
     --experiments rl \
     --num-vnrs 1000 \
-    --substrate-nodes 60,100 \
+    --substrate-nodes 80 \
     --vnr-min-nodes 2 \
     --vnr-max-nodes 10 \
-    --num-replicas 2 \
     --base-seed 9999 \
-    --output-dir dataset/rl_training/eval \
+    --output-dir dataset/eval \
     --force
 
-# 3. Train PPO v2 — Mode A (pre-generated dataset)
+# 3. Train PPO v2
 python -m src.training.train_ppo_v2 \
-    --data-mode pregenerated \
-    --train-dir dataset/rl_training/train \
-    --eval-dir  dataset/rl_training/eval \
+    --train-dir dataset/train/rl_training \
+    --eval-dir  dataset/eval/rl_training \
     --num-epochs 500 \
     --reward simple \
     --eval-every 10 \
@@ -889,31 +857,17 @@ python -m src.training.train_ppo_v2 \
     --run-name ppo_v2_pregenerated \
     --save-dir checkpoints
 
-# 4. Train PPO v2 — Mode B (on-the-fly generation)
-python -m src.training.train_ppo_v2 \
-    --data-mode on_the_fly \
-    --sub-min-nodes 40 \
-    --sub-max-nodes 90 \
-    --num-vnrs-per-episode 200 \
-    --vnr-min-nodes 2 \
-    --vnr-max-nodes 10 \
-    --num-epochs 500 \
-    --reward simple \
-    --eval-every 10 \
-    --run-name ppo_v2_on_the_fly \
-    --save-dir checkpoints
-
-# 5. Monitor training
+# 4. Monitor training
 tensorboard --logdir runs/
 # Key panels:
 #   Train/PolicyLoss, Train/ValueLoss, Train/ExplainedVariance  ← optimizer health
 #   Train/AcceptanceRate (smoothed ~50 epochs)                  ← noisy training signal
 #   Eval/AcceptanceRate, Eval/RevenueCostRatio                  ← true learning signal
 
-# 6. Evaluate final checkpoint
+# 5. Evaluate final checkpoint
 python -m src.training.evaluate \
     --checkpoint checkpoints/ppo_v2_pregenerated_best.pt \
-    --eval-dir dataset/rl_training/eval \
+    --eval-dir dataset/eval/rl_training \
     --hpso-iter 30 \
     --episodes 20
 ```

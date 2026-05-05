@@ -190,7 +190,15 @@ Examples:
                 generated[exp_name] = metadata
             
             elif exp_name == 'rl':
-                metadata = generator.generate_rl_training_dataset(seed=args.base_seed)
+                rl_vnrs = parse_range(args.num_vnrs, (1000, 1000))[0]
+                rl_nodes = parse_range(args.substrate_nodes, (80, 80))[0]
+                metadata = generator.generate_rl_training_dataset(
+                    num_vnrs=rl_vnrs,
+                    num_nodes_total=rl_nodes,
+                    min_vnodes=args.vnr_min_nodes,
+                    max_vnodes=args.vnr_max_nodes,
+                    seed=args.base_seed
+                )
                 generated[exp_name] = metadata
             
             elif exp_name == 'stress':
