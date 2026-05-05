@@ -426,47 +426,97 @@ class DatasetGeneratorV2:
     def generate_rl_training_dataset(
         self,
         num_domains: int = 4,
-        num_nodes_total: int = 80,
-        num_vnrs: int = 1000,
+        substrate_nodes_range: Tuple[int, int] = (80, 80),
+        num_vnrs_range: Tuple[int, int] = (1000, 1000),
         min_vnodes: int = 2,
         max_vnodes: int = 10,
         substrate_cpu_range: Tuple[int, int] = (100, 300),
         substrate_bw_range: Tuple[int, int] = (1000, 3000),
-        vnr_cpu_range: Tuple[int, int] = (10, 80),
-        vnr_bw_range: Tuple[int, int] = (50, 500),
+        vnr_cpu_range: Tuple[int, int] = (1, 10),
+        vnr_bw_range: Tuple[int, int] = (5, 15),
         max_lifetime: int = 500,
         avg_inter_arrival: float = 1.0,
-        seed: int = 999,
+        base_seed: int = 999,
+        num_replicas: int = 1,
     ) -> dict:
         """
         Pre-tuned dataset for RL agent training (PPO / REINFORCE).
-
-        VNR node counts vary uniformly from ``min_vnodes`` to ``max_vnodes``
-        within a single stream, exposing the agent to requests of all sizes during
-        training and improving generalisation.
-
-        Returns
-        -------
-        dict with keys ``substrate_path`` and ``vnr_path``.
+        Matches fig6 ranges to prevent training-inference distribution mismatch.
         """
-        return self.generate_custom_dataset(
-            name="rl_training",
-            num_domains=num_domains,
-            num_nodes_total=num_nodes_total,
-            p_intra=0.6,
-            p_inter=0.05,
-            substrate_cpu_range=substrate_cpu_range,
-            substrate_bw_range=substrate_bw_range,
-            num_vnrs=num_vnrs,
-            min_vnodes=min_vnodes,
-            max_vnodes=max_vnodes,
-            vnr_cpu_range=vnr_cpu_range,
-            vnr_bw_range=vnr_bw_range,
-            max_lifetime=max_lifetime,
-            avg_inter_arrival=avg_inter_arrival,
-            hot_domain_prob=0.7,
-            seed=seed,
-        )
+        exp_dir = os.path.join(self.base_dir, "rl_training")
+        os.makedirs(exp_dir, exist_ok=True)
+        self._header("RL TRAINING DATASET", num_replicas)
+
+        replicas = []
+        rng = random.Random(base_seed)
+
+        for replica_id in range(num_replicas):
+            replica_seed = base_seed + replica_id * 1000
+            local_rng = random.Random(replica_seed)
+
+            num_nodes_total = local_rng.randint(*substrate_nodes_range)
+            num_vnrs = local_rng.randint(*num_vnrs_range)
+
+            # If only 1 replica, save directly in rl_training/ to avoid breaking scripts
+            if num_replicas == 1:
+                replica_dir = exp_dir
+            else:
+                replica_dir = os.path.join(exp_dir, f"replica_{replica_id}")
+                os.makedirs(replica_dir, exist_ok=True)
+
+            print(f"\n[Replica {replica_id + 1}/{num_replicas}] "
+                  f"nodes={num_nodes_total}, vnrs={num_vnrs}, "
+                  f"vnode_range=[{min_vnodes},{max_vnodes}], seed={replica_seed}")
+
+            substrate_path = os.path.join(replica_dir, "substrate.json")
+            generate_substrate(
+                num_domains=num_domains,
+                num_nodes_total=num_nodes_total,
+                p_intra=0.6, p_inter=0.05,
+                cpu_range=substrate_cpu_range,
+                bw_range=substrate_bw_range,
+                node_cost_range=(1, 1),
+                inter_domain_bw_cost=(1, 1),
+                seed=replica_seed,
+                export_path=substrate_path,
+            )
+
+            vnr_path = os.path.join(replica_dir, "vnr_stream.json")
+            generate_vnr_stream_v2(
+                num_vnrs=num_vnrs,
+                num_domains=num_domains,
+                min_vnodes=min_vnodes,
+                max_vnodes=max_vnodes,
+                cpu_range=vnr_cpu_range,
+                bw_range=vnr_bw_range,
+                max_lifetime=max_lifetime,
+                avg_inter_arrival=avg_inter_arrival,
+                hot_domain_prob=0.7,
+                export_path=vnr_path,
+                seed=replica_seed + 1,
+            )
+
+            replicas.append({
+                "replica_id": replica_id,
+                "seed": replica_seed,
+                "substrate_nodes": num_nodes_total,
+                "num_vnrs": num_vnrs,
+                "substrate_path": substrate_path,
+                "vnr_path": vnr_path,
+            })
+
+        metadata = {
+            "experiment": "rl_training",
+            "vnr_min_nodes": min_vnodes,
+            "vnr_max_nodes": max_vnodes,
+            "num_domains": num_domains,
+            "num_replicas": num_replicas,
+            "base_seed": base_seed,
+            "replicas": replicas,
+        }
+        self._save_metadata("rl_training", metadata)
+        self._footer("RL TRAINING DATASET", exp_dir)
+        return metadata
 
     def generate_stress_dataset(
         self,

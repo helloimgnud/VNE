@@ -161,16 +161,18 @@ class PPOTrainerV2:
         }
 
         # Environments — completely separate, never share state
+        sub_path, vnr_path = self._sample_replica(cfg.train_dir)
         self.train_env = VNEEnvironmentV2(
-            substrate_path=os.path.join(cfg.train_dir, "substrate.json"),
-            vnr_path=os.path.join(cfg.train_dir, "vnr_stream.json"),
+            substrate_path=sub_path,
+            vnr_path=vnr_path,
             window_size=cfg.window_size,
             max_queue_delay=cfg.max_queue_delay,
             hpso_params=hpso_params,
         )
+        sub_path_eval, vnr_path_eval = self._sample_replica(cfg.eval_dir)
         self.eval_env = VNEEnvironmentV2(
-            substrate_path=os.path.join(cfg.eval_dir, "substrate.json"),
-            vnr_path=os.path.join(cfg.eval_dir, "vnr_stream.json"),
+            substrate_path=sub_path_eval,
+            vnr_path=vnr_path_eval,
             window_size=cfg.window_size,
             max_queue_delay=cfg.max_queue_delay,
             hpso_params=hpso_params,
@@ -204,13 +206,25 @@ class PPOTrainerV2:
     # Episode collection
     # ------------------------------------------------------------------
 
+    def _sample_replica(self, base_dir: str) -> Tuple[str, str]:
+        """Returns (substrate_path, vnr_path) randomly sampled from available replicas."""
+        import random
+        if not os.path.exists(base_dir):
+            return os.path.join(base_dir, "substrate.json"), os.path.join(base_dir, "vnr_stream.json")
+        replicas = [d for d in os.listdir(base_dir) if d.startswith("replica_")]
+        if not replicas:
+            return os.path.join(base_dir, "substrate.json"), os.path.join(base_dir, "vnr_stream.json")
+        rep = random.choice(replicas)
+        return os.path.join(base_dir, rep, "substrate.json"), os.path.join(base_dir, rep, "vnr_stream.json")
+
     def _collect_one_episode(self) -> List[dict]:
         """
         Collect ONE complete episode from train_env.
-
-        Returns list of transition dicts, each with:
-          obs, action, log_prob, value, reward, done
         """
+        # Load a random replica before starting the episode
+        sub_path, vnr_path = self._sample_replica(self.cfg.train_dir)
+        self.train_env.load_dataset(sub_path, vnr_path)
+        
         transitions = []
         obs, _      = self.train_env.reset()
         done        = False
@@ -399,6 +413,10 @@ class PPOTrainerV2:
 
         with torch.no_grad():
             for _ in range(n_episodes):
+                # Evaluate on a random eval replica
+                sub_path, vnr_path = self._sample_replica(self.cfg.eval_dir)
+                self.eval_env.load_dataset(sub_path, vnr_path)
+                
                 obs, _ = self.eval_env.reset()
                 ep_reward = 0.0
                 done = False

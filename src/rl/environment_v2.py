@@ -86,10 +86,8 @@ class VNEEnvironmentV2(gymnasium.Env):
         assert substrate_path is not None, "substrate_path is required"
         assert vnr_path is not None, "vnr_path is required"
 
-        # Load once at startup — kept immutable
-        self._substrate_original: nx.Graph = load_substrate_from_json(substrate_path)
-        # load_vnr_stream_from_json (io_utils) already returns list[nx.Graph]
-        self._vnr_stream_raw: List[nx.Graph] = load_vnr_stream_from_json(vnr_path)
+        # Load once at startup (can be changed via load_dataset)
+        self.load_dataset(substrate_path, vnr_path)
 
         self.window_size = window_size
         self.max_queue_delay = max_queue_delay
@@ -117,6 +115,11 @@ class VNEEnvironmentV2(gymnasium.Env):
     # ------------------------------------------------------------------
     # Core gymnasium interface
     # ------------------------------------------------------------------
+
+    def load_dataset(self, substrate_path: str, vnr_path: str):
+        """Hot-swap the dataset to train on a different replica."""
+        self._substrate_original = load_substrate_from_json(substrate_path)
+        self._vnr_stream_raw = load_vnr_stream_from_json(vnr_path)
 
     def reset(self, seed=None, options=None):
         """
