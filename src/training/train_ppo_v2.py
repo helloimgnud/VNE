@@ -33,6 +33,7 @@ from typing import List, Optional
 import torch
 import torch.nn as nn
 from torch.distributions import Categorical
+import copy
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -98,6 +99,8 @@ class GNNActorCriticV2(nn.Module):
     def __init__(self, scheduler: VNRScheduler, substrate_emb_dim: int = 128):
         super().__init__()
         self.scheduler   = scheduler
+        # Independent critic encoder to prevent Value gradients from destroying the Actor's GNN
+        self.critic_encoder = copy.deepcopy(scheduler.substrate_encoder)
         self.value_head  = nn.Linear(substrate_emb_dim, 1)
 
     def forward(self, obs: dict):
@@ -118,9 +121,9 @@ class GNNActorCriticV2(nn.Module):
         scores = self.scheduler(sub_data, vnr_list)   # [B]
         dist   = Categorical(logits=scores)
 
-        # Critic — encode substrate and project to scalar
-        h_s   = self.scheduler.substrate_encoder(sub_data)  # [1, 128]
-        value = self.value_head(h_s).squeeze(-1)             # [1] or scalar
+        # Critic — encode substrate using the independent critic encoder
+        h_s_critic = self.critic_encoder(sub_data)           # [1, 128]
+        value = self.value_head(h_s_critic).squeeze(-1)      # [1] or scalar
         return dist, value
 
     def get_action_and_value(self, obs: dict, action: Optional[torch.Tensor] = None):
@@ -314,6 +317,7 @@ class PPOTrainerV2:
 
         old_log_probs = torch.stack([t["log_prob"] for t in transitions])  # [T]
         old_actions   = torch.stack([t["action"]   for t in transitions])  # [T]
+        old_values    = torch.stack([t["value"]    for t in transitions])  # [T]
 
         total_policy_loss = 0.0
         total_value_loss  = 0.0
@@ -353,6 +357,7 @@ class PPOTrainerV2:
                 mb_adv     = adv[mb_idx].to(self.device)
                 mb_ret     = returns[mb_idx].to(self.device)
                 mb_old_lp  = old_log_probs[mb_idx].to(self.device)
+                mb_old_val = old_values[mb_idx].to(self.device)
 
                 # Policy (clipped surrogate)
                 ratio       = (new_lp - mb_old_lp).exp()
@@ -361,7 +366,15 @@ class PPOTrainerV2:
                 policy_loss = torch.max(pg1, pg2).mean()
 
                 # Value loss (clipped)
-                value_loss  = 0.5 * ((new_val - mb_ret) ** 2).mean()
+                v_loss_unclipped = (new_val - mb_ret) ** 2
+                v_clipped = mb_old_val + torch.clamp(
+                    new_val - mb_old_val,
+                    -cfg.clip_range,
+                    cfg.clip_range,
+                )
+                v_loss_clipped = (v_clipped - mb_ret) ** 2
+                v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+                value_loss = 0.5 * v_loss_max.mean()
 
                 # Entropy bonus
                 entropy_loss = -ent_t.mean()
