@@ -205,7 +205,11 @@ class BatchContextEncoder(nn.Module):
             batch_first=True,
             norm_first=True,
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.transformer = nn.TransformerEncoder(
+            encoder_layer, 
+            num_layers=num_layers,
+            enable_nested_tensor=False
+        )
         self.proj        = nn.Linear(vnr_dim, out_dim)
 
     def forward(self, vnr_embeddings: torch.Tensor) -> torch.Tensor:

@@ -29,9 +29,13 @@
         "experiments": [
             "fig6"
         ],
-        "algorithms": null,
-        "dataset_dir": "dataset",
-        "num_runs": 3,
+        "algorithms": [
+            "hpso_batch_scheduler",
+            "hpso_batch",
+            "baseline"
+        ],
+        "dataset_dir": "dataset/fig6/replica_0",
+        "num_runs": 1,
         "run_id": null,
         "no_plot": false,
         "plot_only": false,
