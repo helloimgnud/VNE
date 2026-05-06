@@ -168,15 +168,53 @@ def substrate_resource_summary(substrate) -> str:
     u = substrate_utilisation(substrate)
     return f"CPU Util: {u['cpu_util']:.1%} | BW Util: {u['bw_util']:.1%}"
 
+# def release_vnr_embedding(substrate, vnr, mapping, link_paths):
+#     for v_node, s_node in mapping.items():
+#         if s_node in substrate:
+#             cpu_req = float(vnr.nodes[v_node].get('cpu', 0.0))
+#             substrate.nodes[s_node]['cpu'] += cpu_req
+            
+#     for (u, v), path in link_paths.items():
+#         bw_req = float(vnr.edges[u, v].get('bw', 0.0))
+#         for i in range(len(path) - 1):
+#             a, b = path[i], path[i + 1]
+#             if substrate.has_edge(a, b):
+#                 substrate.edges[a, b]['bw'] += bw_req
+
+# src/utils/graph_utils.py — replace release_vnr_embedding()
+
 def release_vnr_embedding(substrate, vnr, mapping, link_paths):
+    """
+    Release all resources consumed by an embedded VNR.
+
+    Handles both directed (u→v) and undirected (v→u) edge lookups so BW is
+    always correctly restored regardless of path direction stored in link_paths.
+    """
+    # --- CPU ---
     for v_node, s_node in mapping.items():
         if s_node in substrate:
             cpu_req = float(vnr.nodes[v_node].get('cpu', 0.0))
-            substrate.nodes[s_node]['cpu'] += cpu_req
-            
-    for (u, v), path in link_paths.items():
-        bw_req = float(vnr.edges[u, v].get('bw', 0.0))
+            nd = substrate.nodes[s_node]
+            nd['cpu'] = nd.get('cpu', 0.0) + cpu_req
+            # Keep cpu_res in sync if substrate uses dual fields
+            if 'cpu_res' in nd:
+                nd['cpu_res'] = nd.get('cpu_res', 0.0) + cpu_req
+
+    # --- BW ---
+    for key, path in link_paths.items():
+        # key is (u, v) in VNR space — BW is symmetric
+        u_v, v_v = key[0], key[1]
+        bw_req = float(vnr.edges[u_v, v_v].get('bw', 0.0))
+
         for i in range(len(path) - 1):
             a, b = path[i], path[i + 1]
             if substrate.has_edge(a, b):
-                substrate.edges[a, b]['bw'] += bw_req
+                ed = substrate.edges[a, b]
+            elif substrate.has_edge(b, a):
+                ed = substrate.edges[b, a]
+            else:
+                continue
+
+            ed['bw'] = ed.get('bw', 0.0) + bw_req
+            if 'bw_res' in ed:
+                ed['bw_res'] = ed.get('bw_res', 0.0) + bw_req

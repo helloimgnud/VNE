@@ -248,65 +248,131 @@ class BaseExperiment(ABC):
         
         return algorithm_map[algo_name]
 
-    def _run_algorithm(self, substrate, vnr_stream, algo_name):
-        """Run a single algorithm on a single VNR stream."""
-        from src.simulation.simulator import VNRSimulator, BatchedVNRSimulator
-        # from src.integration.ordered_pipeline import build_ordered_pipeline
+    # src/experiments/base_experiment.py  — replace _run_algorithm() entirely
 
-        if algo_name in ['baseline', 'proposed', 'proposed_KL', 'batch_hpso', 'parallel_hpso_priority', 'hpso_batch', 'hpso_batch_scheduler', 'hpso_batch_scheduler_smallest', 'hpso_batch_scheduler_biggest']:
-            simulator = BatchedVNRSimulator(
-                substrate, 
-                window_size=10, 
-                max_queue_delay=50
+def _run_algorithm(self, substrate, vnr_stream, algo_name):
+    """
+    Run a single algorithm on a single VNR stream.
+
+    Batched algorithms now use EnvV2BatchDriver (correct leave-events, queue
+    expiry, and departure times).  Single-VNR algorithms keep the old
+    VNRSimulator path unchanged.
+    """
+    from src.simulation.env_simulator import run_with_env_v2
+
+    BATCHED_ALGOS = {
+        'baseline',
+        'proposed',
+        'proposed_KL',
+        'batch_hpso',
+        'parallel_hpso_priority',
+        'hpso_batch',
+        'hpso_batch_scheduler',
+        'hpso_batch_scheduler_smallest',
+        'hpso_batch_scheduler_biggest',
+    }
+
+    if algo_name in BATCHED_ALGOS:
+
+        if algo_name == 'hpso_batch_scheduler':
+            # --- RL-scheduler path (keeps checkpoint logic) ---
+            from functools import partial
+            from src.scheduler import VNRScheduler
+            from src.algorithms.hpso_batch_scheduler import hpso_embed_batch_scheduled
+            import os
+
+            possible_checkpoints = [
+                "checkpoints/ppo_v2_run5_best.pt",
+            ]
+            ckpt_to_load = next(
+                (c for c in possible_checkpoints if os.path.exists(c)), None
             )
-            
-            if algo_name == 'hpso_batch_scheduler':
-                from functools import partial
-                from src.scheduler import VNRScheduler
-                from src.algorithms.hpso_batch_scheduler import hpso_embed_batch_scheduled
-                import os
-                
-                # Priority list of checkpoints to attempt loading
-                possible_checkpoints = [
-                    "checkpoints/ppo_v2_run5_best.pt"
-                    # "checkpoints/ppo_current_best.pt"
-                    # "checkpoints/ppo_v2_run3_best.pt",
-                    # "checkpoints/ppo_v2_run2_best.pt",
-                    # "checkpoints/ppo_v2_run1_best.pt",
-                    # "checkpoints/ppo_phase2_final.pt",
-                    # "checkpoints/ppo_phase2_step1024.pt"
-                ]
-                
-                ckpt_to_load = None
-                for ckpt in possible_checkpoints:
-                    if os.path.exists(ckpt):
-                        ckpt_to_load = ckpt
-                        break
-                
-                if ckpt_to_load:
-                    print(f"   [RL] Loading agent checkpoint from: {ckpt_to_load}")
-                    scheduler = VNRScheduler.load(ckpt_to_load)
-                else:
-                    print(f"   [RL] Warning: Checkpoints {ckpt_final} not found! Falling back to heuristic.")
-                    scheduler = None
-                
-                batch_algo = partial(hpso_embed_batch_scheduled, scheduler=scheduler)
+
+            if ckpt_to_load:
+                print(f"   [RL] Loading agent checkpoint from: {ckpt_to_load}")
+                scheduler = VNRScheduler.load(ckpt_to_load)
             else:
-                batch_algo = self.get_algorithm_runner(algo_name)
-                
-            # pipeline = build_ordered_pipeline(pretrained_path='checkpoint/final.pt', train=False)
-            # metrics = simulator.simulate_batched_stream(vnr_stream, pipeline.process_batch)
-            metrics = simulator.simulate_batched_stream(
-                vnr_stream, 
-                batch_algo,
-                verbose=False
-            )
+                print("   [RL] Warning: no checkpoint found. Falling back to heuristic.")
+                scheduler = None
+
+            batch_algo = partial(hpso_embed_batch_scheduled, scheduler=scheduler)
         else:
-            simulator = VNRSimulator(substrate)
-            algo = self.get_algorithm_runner(algo_name)
-            metrics = simulator.simulate_stream(
-                vnr_stream,
-                algo,
-                verbose=False
-            )
-        return metrics
+            batch_algo = self.get_algorithm_runner(algo_name)
+
+        return run_with_env_v2(
+            substrate      = substrate,
+            vnr_stream     = vnr_stream,
+            batch_algorithm= batch_algo,
+            window_size    = 10,
+            max_queue_delay= 50,
+        )
+
+    else:
+        # --- Single-VNR path (unchanged) ---
+        from src.simulation.simulator import VNRSimulator
+        simulator = VNRSimulator(substrate)
+        algo      = self.get_algorithm_runner(algo_name)
+        return simulator.simulate_stream(vnr_stream, algo, verbose=False)
+
+    # def _run_algorithm(self, substrate, vnr_stream, algo_name):
+    #     """Run a single algorithm on a single VNR stream."""
+    #     from src.simulation.simulator import VNRSimulator, BatchedVNRSimulator
+    #     # from src.integration.ordered_pipeline import build_ordered_pipeline
+
+    #     if algo_name in ['baseline', 'proposed', 'proposed_KL', 'batch_hpso', 'parallel_hpso_priority', 'hpso_batch', 'hpso_batch_scheduler', 'hpso_batch_scheduler_smallest', 'hpso_batch_scheduler_biggest']:
+    #         simulator = BatchedVNRSimulator(
+    #             substrate, 
+    #             window_size=10, 
+    #             max_queue_delay=50
+    #         )
+            
+    #         if algo_name == 'hpso_batch_scheduler':
+    #             from functools import partial
+    #             from src.scheduler import VNRScheduler
+    #             from src.algorithms.hpso_batch_scheduler import hpso_embed_batch_scheduled
+    #             import os
+                
+    #             # Priority list of checkpoints to attempt loading
+    #             possible_checkpoints = [
+    #                 "checkpoints/ppo_v2_run5_best.pt"
+    #                 # "checkpoints/ppo_current_best.pt"
+    #                 # "checkpoints/ppo_v2_run3_best.pt",
+    #                 # "checkpoints/ppo_v2_run2_best.pt",
+    #                 # "checkpoints/ppo_v2_run1_best.pt",
+    #                 # "checkpoints/ppo_phase2_final.pt",
+    #                 # "checkpoints/ppo_phase2_step1024.pt"
+    #             ]
+                
+    #             ckpt_to_load = None
+    #             for ckpt in possible_checkpoints:
+    #                 if os.path.exists(ckpt):
+    #                     ckpt_to_load = ckpt
+    #                     break
+                
+    #             if ckpt_to_load:
+    #                 print(f"   [RL] Loading agent checkpoint from: {ckpt_to_load}")
+    #                 scheduler = VNRScheduler.load(ckpt_to_load)
+    #             else:
+    #                 print(f"   [RL] Warning: Checkpoints {ckpt_final} not found! Falling back to heuristic.")
+    #                 scheduler = None
+                
+    #             batch_algo = partial(hpso_embed_batch_scheduled, scheduler=scheduler)
+    #         else:
+    #             batch_algo = self.get_algorithm_runner(algo_name)
+                
+    #         # pipeline = build_ordered_pipeline(pretrained_path='checkpoint/final.pt', train=False)
+    #         # metrics = simulator.simulate_batched_stream(vnr_stream, pipeline.process_batch)
+    #         metrics = simulator.simulate_batched_stream(
+    #             vnr_stream, 
+    #             batch_algo,
+    #             verbose=False
+    #         )
+    #     else:
+    #         simulator = VNRSimulator(substrate)
+    #         algo = self.get_algorithm_runner(algo_name)
+    #         metrics = simulator.simulate_stream(
+    #             vnr_stream,
+    #             algo,
+    #             verbose=False
+    #         )
+    #     return metrics

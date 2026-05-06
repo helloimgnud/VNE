@@ -76,7 +76,7 @@ class VNEEnvironmentV2(gymnasium.Env):
         substrate_path: str,
         vnr_path: str,
         # --- Simulation params ---
-        window_size: int = 50,
+        window_size: int = 10,
         max_queue_delay: int = 100,
         # --- HPSO params ---
         hpso_params: Optional[dict] = None,
@@ -174,11 +174,25 @@ class VNEEnvironmentV2(gymnasium.Env):
         vnr: nx.Graph = self.vnr_queue.pop(action)
 
         # --- HPSO Embedding ---
-        result = hpso_embed(
-            substrate_graph=self.substrate,
-            vnr_graph=vnr,
-            **self.hpso_params,
-        )
+        # result = hpso_embed(
+        #     substrate_graph=self.substrate,
+        #     vnr_graph=vnr,
+        #     **self.hpso_params,
+        # )
+
+        _embed_fn = self.hpso_params.pop('embed_fn', None)
+
+        if _embed_fn is not None:
+            # batch-style: wrap single VNR as a batch of 1
+            accepted, _ = _embed_fn(self.substrate, [(vnr, None)])
+            result = (accepted[0][1], accepted[0][2]) if accepted else None
+        else:
+            from src.algorithms.fast_hpso import hpso_embed
+            result = hpso_embed(
+                substrate_graph=self.substrate,
+                vnr_graph=vnr,
+                **self.hpso_params,
+            )
 
         if result is not None:
             mapping, link_paths = result
