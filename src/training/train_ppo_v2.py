@@ -186,12 +186,12 @@ class PPOTrainerV2:
         scheduler = VNRScheduler(use_batch_context=True)
         self.ac   = GNNActorCriticV2(scheduler).to(self.device)
 
+        # Optimizer
+        self.optimizer = torch.optim.Adam(self.ac.parameters(), lr=cfg.lr, eps=1e-5)
+
         if cfg.load_checkpoint:
             self._load_checkpoint(cfg.load_checkpoint)
             print(f"[PPOTrainerV2] Loaded checkpoint: {cfg.load_checkpoint}")
-
-        # Optimizer
-        self.optimizer = torch.optim.Adam(self.ac.parameters(), lr=cfg.lr, eps=1e-5)
 
         # TensorBoard
         if _TB_AVAILABLE:
