@@ -235,18 +235,33 @@ class VNRScheduler(nn.Module):
 
         model = cls(**model_kwargs)
         if "state_dict" in ckpt:
-            model.load_state_dict(ckpt["state_dict"])
+            target_sd = ckpt["state_dict"]
         elif "ac_state_dict" in ckpt:
             # Support loading directly from PPO Actor-Critic checkpoints
             ac_sd = ckpt["ac_state_dict"]
-            scheduler_sd = {
+            target_sd = {
                 k[len("scheduler."):]: v 
                 for k, v in ac_sd.items() 
                 if k.startswith("scheduler.")
             }
-            model.load_state_dict(scheduler_sd)
         else:
             raise KeyError(f"Checkpoint format not recognized. Keys found: {list(ckpt.keys())}")
+            
+        current_state = model.state_dict()
+        for k in list(target_sd.keys()):
+            if k in current_state:
+                old_shape = target_sd[k].shape
+                new_shape = current_state[k].shape
+                if old_shape != new_shape:
+                    print(f"[VNRScheduler] Adjusting weight shape for {k}: {old_shape} -> {new_shape}")
+                    new_tensor = torch.zeros(new_shape, dtype=target_sd[k].dtype, device=target_sd[k].device)
+                    if len(old_shape) == 2 and len(new_shape) == 2:
+                        new_tensor[:old_shape[0], :old_shape[1]] = target_sd[k]
+                    elif len(old_shape) == 1 and len(new_shape) == 1:
+                        new_tensor[:old_shape[0]] = target_sd[k]
+                    target_sd[k] = new_tensor
+                    
+        model.load_state_dict(target_sd)
         model.to(device)
         model.eval()
         print(f"[VNRScheduler] Loaded checkpoint ← {path}  (device={device})")

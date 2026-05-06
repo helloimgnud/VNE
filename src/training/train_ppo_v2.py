@@ -518,9 +518,28 @@ class PPOTrainerV2:
 
     def _load_checkpoint(self, path: str):
         ckpt = torch.load(path, map_location=self.device)
-        self.ac.load_state_dict(ckpt["ac_state_dict"])
+        ac_state_dict = ckpt["ac_state_dict"]
+        
+        current_state = self.ac.state_dict()
+        for k in list(ac_state_dict.keys()):
+            if k in current_state:
+                old_shape = ac_state_dict[k].shape
+                new_shape = current_state[k].shape
+                if old_shape != new_shape:
+                    print(f"  [PPOTrainerV2] Adjusting weight shape for {k}: {old_shape} -> {new_shape}")
+                    new_tensor = torch.zeros(new_shape, dtype=ac_state_dict[k].dtype, device=ac_state_dict[k].device)
+                    if len(old_shape) == 2 and len(new_shape) == 2:
+                        new_tensor[:old_shape[0], :old_shape[1]] = ac_state_dict[k]
+                    elif len(old_shape) == 1 and len(new_shape) == 1:
+                        new_tensor[:old_shape[0]] = ac_state_dict[k]
+                    ac_state_dict[k] = new_tensor
+                    
+        self.ac.load_state_dict(ac_state_dict)
         if "optimizer_state" in ckpt:
-            self.optimizer.load_state_dict(ckpt["optimizer_state"])
+            try:
+                self.optimizer.load_state_dict(ckpt["optimizer_state"])
+            except Exception as e:
+                print(f"  [PPOTrainerV2] Skipping optimizer state loading due to error: {e}")
 
     # ------------------------------------------------------------------
     # Main training loop
