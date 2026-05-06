@@ -34,7 +34,7 @@
             "hpso_batch",
             "baseline"
         ],
-        "dataset_dir": "dataset/fig6/replica_0",
+        "dataset_dir": "dataset",
         "num_runs": 1,
         "run_id": null,
         "no_plot": false,

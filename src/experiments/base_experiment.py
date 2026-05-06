@@ -268,7 +268,8 @@ class BaseExperiment(ABC):
                 
                 # Priority list of checkpoints to attempt loading
                 possible_checkpoints = [
-                    "checkpoints/ppo_current_best.pt"
+                    "checkpoints/ppo_v2_run5_best.pt"
+                    # "checkpoints/ppo_current_best.pt"
                     # "checkpoints/ppo_v2_run3_best.pt",
                     # "checkpoints/ppo_v2_run2_best.pt",
                     # "checkpoints/ppo_v2_run1_best.pt",
