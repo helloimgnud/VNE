@@ -79,6 +79,7 @@ class PPOConfigV2:
     eval_episodes: int = 3
     log_dir:  str = "runs"
     save_dir: str = "checkpoints"
+    save_every: int = 0
     run_name: str = "ppo_v2"
     device:   str = "auto"
     load_checkpoint: Optional[str] = None
@@ -588,6 +589,12 @@ class PPOTrainerV2:
                     f"R/C={eval_metrics['Eval/RevenueCostRatio']:.4f}"
                 )
 
+            # 7. Periodic checkpoint saving
+            if self.cfg.save_every > 0 and (epoch + 1) % self.cfg.save_every == 0:
+                periodic_path = os.path.join(self.cfg.save_dir, f"{self.cfg.run_name}_epoch{epoch+1}.pt")
+                self._save_checkpoint(periodic_path, epoch=epoch)
+                print(f"  [Save] Periodic checkpoint → {periodic_path}")
+
         # Final save
         final_path = os.path.join(self.cfg.save_dir, f"{self.cfg.run_name}_final.pt")
         self._save_checkpoint(final_path, epoch=self.cfg.num_epochs - 1)
@@ -633,6 +640,7 @@ def _parse_args():
     p.add_argument("--eval-episodes", type=int, default=3)
     p.add_argument("--log-dir",  default="runs")
     p.add_argument("--save-dir", default="checkpoints")
+    p.add_argument("--save-every", type=int, default=0, help="Save a checkpoint every N epochs (0 to disable)")
     p.add_argument("--run-name", default="ppo_v2")
     p.add_argument("--device",   default="auto")
     p.add_argument("--load-checkpoint", default=None)
@@ -664,6 +672,7 @@ def main():
         eval_episodes=args.eval_episodes,
         log_dir=args.log_dir,
         save_dir=args.save_dir,
+        save_every=args.save_every,
         run_name=args.run_name,
         device=args.device,
         load_checkpoint=args.load_checkpoint,
