@@ -266,13 +266,23 @@ class BaseExperiment(ABC):
                 from src.algorithms.hpso_batch_scheduler import hpso_embed_batch_scheduled
                 import os
                 
-                # Check for either the step1024 or final checkpoint depending on existence
-                ckpt_final = "checkpoints/ppo_phase2_final.pt"
-                ckpt_step = "checkpoints/ppo_phase2_step1024.pt"
+                # Priority list of checkpoints to attempt loading
+                possible_checkpoints = [
+                    "checkpoints/ppo_current_best.pt"
+                    # "checkpoints/ppo_v2_run3_best.pt",
+                    # "checkpoints/ppo_v2_run2_best.pt",
+                    # "checkpoints/ppo_v2_run1_best.pt",
+                    # "checkpoints/ppo_phase2_final.pt",
+                    # "checkpoints/ppo_phase2_step1024.pt"
+                ]
                 
-                ckpt_to_load = ckpt_final if os.path.exists(ckpt_final) else ckpt_step
+                ckpt_to_load = None
+                for ckpt in possible_checkpoints:
+                    if os.path.exists(ckpt):
+                        ckpt_to_load = ckpt
+                        break
                 
-                if os.path.exists(ckpt_to_load):
+                if ckpt_to_load:
                     print(f"   [RL] Loading agent checkpoint from: {ckpt_to_load}")
                     scheduler = VNRScheduler.load(ckpt_to_load)
                 else:
