@@ -1,46 +1,50 @@
 {
-  "seed": 42,
-  "output_dir": "results",
-  "algorithms": ["baseline", "d_vine_sp", "pso", "hpso"],
-
-  "substrate": {
-    "num_domains": 4,
-    "num_nodes_total": 50,
-    "p_intra": 0.5,
-    "p_inter": 0.05,
-    "cpu_range": [100, 300],
-    "bw_range": [1000, 3000],
-    "node_cost_range": [1, 10],
-    "inter_domain_bw_cost": [5, 15]
-  },
-
-  "vnr": {
-    "num_nodes": 8,
-    "edge_prob": 0.75,
-    "cpu_range": [80, 150],
-    "bw_range": [100, 2000]
-  },
-
-  "experiment": {
-    "num_vnrs": 40
-  },
-
-  "pso": {
-    "particles": 30,
-    "iterations": 50,
-    "w_max": 0.9,
-    "w_min": 0.4,
-    "beta": 0.3,
-    "gamma": 0.4
-  },
-
-  "hpso": {
-    "particles": 30,
-    "iterations": 50,
-    "w_max": 0.9,
-    "w_min": 0.4,
-    "beta": 0.3,
-    "gamma": 0.4,
-    "cooling_rate": 0.9
-  }
+    "training": {
+        "train_dir": "dataset/fig6/replica_0",
+        "eval_dir": "dataset/fig6/replica_1",
+        "num_epochs": 50,
+        "window_size": 10,
+        "max_queue_delay": 50,
+        "eval_every": 5,
+        "save_every": 5,
+        "run_name": "ppo_v2_run4",
+        "save_dir": "checkpoints",
+        "load_checkpoint": "checkpoints/ppo_current_best.pt",
+        "batch_size": 64,
+        "n_ppo_epochs": 8,
+        "lr": 3e-4,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "clip_range": 0.2,
+        "ent_coef": 0.01,
+        "vf_coef": 0.5,
+        "grad_clip": 0.5,
+        "hpso_particles": 20,
+        "hpso_iterations": 10,
+        "eval_episodes": 3,
+        "log_dir": "runs",
+        "device": "auto"
+    },
+    "experiments": {
+        "experiments": ["fig6"],
+        "algorithms": ["hpso_batch_scheduler", "hpso_batch", "pso"],
+        "dataset_dir": "dataset",
+        "num_runs": 3,
+        "run_id": null,
+        "no_plot": false,
+        "plot_only": false,
+        "list_runs": false,
+        "compare_runs": false
+    },
+    "dataset_generation": {
+        "experiments": ["fig6"],
+        "output_dir": "dataset",
+        "num_replicas": 2,
+        "substrate_nodes": "50,100",
+        "num_vnrs": "200,300",
+        "vnr_min_nodes": 2,
+        "vnr_max_nodes": 10,
+        "base_seed": 42,
+        "force": true
+    }
 }

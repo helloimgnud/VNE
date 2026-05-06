@@ -75,15 +75,20 @@ class VNRSimulator:
             Number of VNRs released
         """
         released_count = 0
+        still_active = deque()
         
-        while self.active_vnrs and self.active_vnrs[0][3] <= current_time:
-            expired_vnr, exp_mapping, exp_paths, dep_time = self.active_vnrs.popleft()
-            self.release_vnr_resources(expired_vnr, exp_mapping, exp_paths)
-            released_count += 1
-            
-            if verbose:
-                print(f"   [t={current_time}] Released VNR (departed at {dep_time})")
-        
+        while self.active_vnrs:
+            item = self.active_vnrs.popleft()
+            expired_vnr, exp_mapping, exp_paths, dep_time = item
+            if dep_time <= current_time:
+                self.release_vnr_resources(expired_vnr, exp_mapping, exp_paths)
+                released_count += 1
+                if verbose:
+                    print(f"   [t={current_time}] Released VNR (departed at {dep_time})")
+            else:
+                still_active.append(item)
+                
+        self.active_vnrs = still_active
         return released_count
     
     def embed_vnr(self, vnr_graph, embedding_algorithm, verbose=False):
@@ -369,7 +374,8 @@ class BatchedVNRSimulator(VNRSimulator):
             
             # Add to active VNRs
             lifetime = vnr_graph.graph.get('lifetime', 50)
-            departure_time = self.current_time + lifetime
+            arrival_time = vnr_graph.graph.get('arrival_time', self.current_time)
+            departure_time = arrival_time + lifetime
             self.active_vnrs.append((vnr_graph, mapping, link_paths, departure_time))
             
             if verbose:

@@ -613,37 +613,46 @@ class PPOTrainerV2:
 def _parse_args():
     p = argparse.ArgumentParser(description="Train PPO v2 for VNR Ordering")
 
+    p.add_argument("--config", type=str, default="config.json", help="Path to config file")
+    temp_args, _ = p.parse_known_args()
+    
+    import json
+    config_data = {}
+    if os.path.exists(temp_args.config):
+        with open(temp_args.config, 'r') as f:
+            config_data = json.load(f).get("training", {})
+
     # Data
-    p.add_argument("--train-dir", required=True, help="Directory with substrate.json + vnr_stream.json for training")
-    p.add_argument("--eval-dir",  required=True, help="Directory with substrate.json + vnr_stream.json for evaluation")
-    p.add_argument("--window-size",     type=int, default=50)
-    p.add_argument("--max-queue-delay", type=int, default=100)
+    p.add_argument("--train-dir", default=config_data.get("train_dir", ""), help="Directory with substrate.json + vnr_stream.json for training")
+    p.add_argument("--eval-dir",  default=config_data.get("eval_dir", ""), help="Directory with substrate.json + vnr_stream.json for evaluation")
+    p.add_argument("--window-size",     type=int, default=config_data.get("window_size", 50))
+    p.add_argument("--max-queue-delay", type=int, default=config_data.get("max_queue_delay", 100))
 
     # PPO
-    p.add_argument("--num-epochs",    type=int,   default=500)
-    p.add_argument("--batch-size",    type=int,   default=64)
-    p.add_argument("--n-ppo-epochs",  type=int,   default=8)
-    p.add_argument("--lr",            type=float, default=3e-4)
-    p.add_argument("--gamma",         type=float, default=0.99)
-    p.add_argument("--gae-lambda",    type=float, default=0.95)
-    p.add_argument("--clip-range",    type=float, default=0.2)
-    p.add_argument("--ent-coef",      type=float, default=0.01)
-    p.add_argument("--vf-coef",       type=float, default=0.5)
-    p.add_argument("--grad-clip",     type=float, default=0.5)
+    p.add_argument("--num-epochs",    type=int,   default=config_data.get("num_epochs", 500))
+    p.add_argument("--batch-size",    type=int,   default=config_data.get("batch_size", 64))
+    p.add_argument("--n-ppo-epochs",  type=int,   default=config_data.get("n_ppo_epochs", 8))
+    p.add_argument("--lr",            type=float, default=config_data.get("lr", 3e-4))
+    p.add_argument("--gamma",         type=float, default=config_data.get("gamma", 0.99))
+    p.add_argument("--gae-lambda",    type=float, default=config_data.get("gae_lambda", 0.95))
+    p.add_argument("--clip-range",    type=float, default=config_data.get("clip_range", 0.2))
+    p.add_argument("--ent-coef",      type=float, default=config_data.get("ent_coef", 0.01))
+    p.add_argument("--vf-coef",       type=float, default=config_data.get("vf_coef", 0.5))
+    p.add_argument("--grad-clip",     type=float, default=config_data.get("grad_clip", 0.5))
 
     # HPSO
-    p.add_argument("--hpso-particles",  type=int, default=20)
-    p.add_argument("--hpso-iterations", type=int, default=10)
+    p.add_argument("--hpso-particles",  type=int, default=config_data.get("hpso_particles", 20))
+    p.add_argument("--hpso-iterations", type=int, default=config_data.get("hpso_iterations", 10))
 
     # Logging
-    p.add_argument("--eval-every",    type=int, default=10)
-    p.add_argument("--eval-episodes", type=int, default=3)
-    p.add_argument("--log-dir",  default="runs")
-    p.add_argument("--save-dir", default="checkpoints")
-    p.add_argument("--save-every", type=int, default=0, help="Save a checkpoint every N epochs (0 to disable)")
-    p.add_argument("--run-name", default="ppo_v2")
-    p.add_argument("--device",   default="auto")
-    p.add_argument("--load-checkpoint", default=None)
+    p.add_argument("--eval-every",    type=int, default=config_data.get("eval_every", 10))
+    p.add_argument("--eval-episodes", type=int, default=config_data.get("eval_episodes", 3))
+    p.add_argument("--log-dir",  default=config_data.get("log_dir", "runs"))
+    p.add_argument("--save-dir", default=config_data.get("save_dir", "checkpoints"))
+    p.add_argument("--save-every", type=int, default=config_data.get("save_every", 0), help="Save a checkpoint every N epochs (0 to disable)")
+    p.add_argument("--run-name", default=config_data.get("run_name", "ppo_v2"))
+    p.add_argument("--device",   default=config_data.get("device", "auto"))
+    p.add_argument("--load-checkpoint", default=config_data.get("load_checkpoint", None))
 
     return p.parse_args()
 

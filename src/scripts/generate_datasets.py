@@ -46,23 +46,33 @@ Examples:
         """
     )
     
+    parser.add_argument("--config", type=str, default="config.json", help="Path to config file")
+    temp_args, _ = parser.parse_known_args()
+    
+    import json
+    config_data = {}
+    if os.path.exists(temp_args.config):
+        with open(temp_args.config, 'r') as f:
+            config_data = json.load(f).get("dataset_generation", {})
+
     parser.add_argument(
         '--experiments',
         nargs='+',
         choices=['fig6', 'fig7', 'fig8', 'rl', 'stress', 'custom', 'all'],
-        default=['all'],
+        default=config_data.get('experiments', ['all']),
         help='Which experiment datasets to generate'
     )
     
     parser.add_argument(
         '--output-dir',
-        default='dataset',
+        default=config_data.get('output_dir', 'dataset'),
         help='Output directory for datasets (default: dataset/)'
     )
     
     parser.add_argument(
         '--force',
         action='store_true',
+        default=config_data.get('force', False),
         help='Force regeneration even if dataset exists'
     )
     
@@ -70,21 +80,21 @@ Examples:
     parser.add_argument(
         '--num-replicas',
         type=int,
-        default=10,
+        default=config_data.get('num_replicas', 10),
         help='Number of dataset replicas to generate (default: 10)'
     )
 
     parser.add_argument(
         '--substrate-nodes',
         type=str,
-        default=None,
+        default=config_data.get('substrate_nodes', None),
         help='Substrate nodes range, e.g., "80,120" (default: 100,100)'
     )
 
     parser.add_argument(
         '--num-vnrs',
         type=str,
-        default=None,
+        default=config_data.get('num_vnrs', None),
         help='Number of VNRs range, e.g., "150,250" (default: 200,200)'
     )
 
@@ -94,21 +104,21 @@ Examples:
     parser.add_argument(
         '--vnr-min-nodes',
         type=int,
-        default=2,
+        default=config_data.get('vnr_min_nodes', 2),
         help='Minimum number of virtual nodes per VNR (default: 2)'
     )
 
     parser.add_argument(
         '--vnr-max-nodes',
         type=int,
-        default=8,
+        default=config_data.get('vnr_max_nodes', 8),
         help='Maximum number of virtual nodes per VNR (default: 8)'
     )
 
     parser.add_argument(
         '--base-seed',
         type=int,
-        default=42,
+        default=config_data.get('base_seed', 42),
         help='Base random seed (default: 42)'
     )
     

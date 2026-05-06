@@ -122,11 +122,20 @@ Examples:
         """
     )
     
+    parser.add_argument("--config", type=str, default="config.json", help="Path to config file")
+    temp_args, _ = parser.parse_known_args()
+    
+    import json
+    config_data = {}
+    if os.path.exists(temp_args.config):
+        with open(temp_args.config, 'r') as f:
+            config_data = json.load(f).get("experiments", {})
+
     parser.add_argument(
         '--experiments',
         nargs='+',
         choices=['fig6', 'fig7', 'fig8', 'all'],
-        default=['fig6'],
+        default=config_data.get('experiments', ['fig6']),
         help='Which experiments to run'
     )
     
@@ -134,51 +143,55 @@ Examples:
         '--algorithms',
         nargs='+',
         choices=['baseline', 'd_vine_sp', 'pso', 'hpso', 'mp-pva', 'proposed', 'proposed_KL', 'hpso_batch', 'hpso_batch_scheduler'],
-        default=None,
+        default=config_data.get('algorithms', None),
         help='Algorithms to test (default: hpso_batch_scheduler hpso_batch pso)'
     )
     
     parser.add_argument(
         '--dataset-dir',
-        default='dataset',
+        default=config_data.get('dataset_dir', 'dataset'),
         help='Base directory for datasets'
     )
     
     parser.add_argument(
         '--num-runs',
         type=int,
-        default=3,
+        default=config_data.get('num_runs', 3),
         help='Number of runs per algorithm on the same dataset to average out randomness (default: 3)'
     )
     
     parser.add_argument(
         '--run-id',
         type=str,
-        default=None,
+        default=config_data.get('run_id', None),
         help='Custom run ID (default: auto-generated timestamp)'
     )
     
     parser.add_argument(
         '--no-plot',
         action='store_true',
+        default=config_data.get('no_plot', False),
         help='Skip plotting after running'
     )
     
     parser.add_argument(
         '--plot-only',
         action='store_true',
+        default=config_data.get('plot_only', False),
         help='Only generate plots from existing results'
     )
     
     parser.add_argument(
         '--list-runs',
         action='store_true',
+        default=config_data.get('list_runs', False),
         help='List available runs for experiments'
     )
     
     parser.add_argument(
         '--compare-runs',
         action='store_true',
+        default=config_data.get('compare_runs', False),
         help='Create comparison plots across multiple runs (use with --plot-only)'
     )
     
