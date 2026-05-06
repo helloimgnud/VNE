@@ -26,8 +26,10 @@
         "device": "auto"
     },
     "experiments": {
-        "experiments": ["fig6"],
-        "algorithms": ["hpso_batch_scheduler", "hpso_batch", "pso"],
+        "experiments": [
+            "fig6"
+        ],
+        "algorithms": null,
         "dataset_dir": "dataset",
         "num_runs": 3,
         "run_id": null,
@@ -37,7 +39,9 @@
         "compare_runs": false
     },
     "dataset_generation": {
-        "experiments": ["fig6"],
+        "experiments": [
+            "fig6"
+        ],
         "output_dir": "dataset",
         "num_replicas": 2,
         "substrate_nodes": "50,100",
