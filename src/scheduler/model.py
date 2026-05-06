@@ -234,7 +234,19 @@ class VNRScheduler(nn.Module):
         model_kwargs.setdefault("use_batch_context", use_ctx)
 
         model = cls(**model_kwargs)
-        model.load_state_dict(ckpt["state_dict"])
+        if "state_dict" in ckpt:
+            model.load_state_dict(ckpt["state_dict"])
+        elif "ac_state_dict" in ckpt:
+            # Support loading directly from PPO Actor-Critic checkpoints
+            ac_sd = ckpt["ac_state_dict"]
+            scheduler_sd = {
+                k[len("scheduler."):]: v 
+                for k, v in ac_sd.items() 
+                if k.startswith("scheduler.")
+            }
+            model.load_state_dict(scheduler_sd)
+        else:
+            raise KeyError(f"Checkpoint format not recognized. Keys found: {list(ckpt.keys())}")
         model.to(device)
         model.eval()
         print(f"[VNRScheduler] Loaded checkpoint ← {path}  (device={device})")
