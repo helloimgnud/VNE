@@ -9,9 +9,9 @@ substrate_to_pyg(G)  : convert a substrate NetworkX graph to a PyG Data object
 vnr_to_pyg(G)        : convert a VNR NetworkX graph to a PyG Data object
 
 Feature specs (see network_encoder_rl.md §4):
-  Substrate node  : [cpu_avail, cpu_ratio, degree, avg_bw_neighbors, clustering_coeff]  → shape [N_s, 5]
+  Substrate node  : [cpu_avail, cpu_ratio, degree, avg_bw_neighbors, clustering_coeff, domain]  → shape [N_s, 6]
   Substrate edge  : [bw_avail, bw_ratio]                                                 → shape [E_s, 2]
-  VNR node        : [cpu_demand, degree, sum_bw_incident, cpu_demand/total_cpu]          → shape [N_v, 4]
+  VNR node        : [cpu_demand, degree, sum_bw_incident, cpu_demand/total_cpu, domain, lifetime] → shape [N_v, 6]
   VNR edge        : [bw_demand]                                                          → shape [E_v, 1]
 
 Both functions work safely when the graph has no edges (returns empty tensors).
@@ -38,6 +38,7 @@ def substrate_to_pyg(G: nx.Graph) -> Data:
     Node attributes expected on G:
         ``cpu``       — current available CPU   (float/int)
         ``cpu_total`` — original total CPU      (float/int, optional; defaults to cpu)
+        ``domain``    — domain ID               (float/int, optional)
 
     Edge attributes expected on G:
         ``bw``        — current available BW    (float/int)
@@ -46,7 +47,7 @@ def substrate_to_pyg(G: nx.Graph) -> Data:
     Returns
     -------
     torch_geometric.data.Data
-        x          : [N_s, 5]  node features
+        x          : [N_s, 6]  node features
         edge_index : [2, 2*E_s] (undirected → both directions)
         edge_attr  : [2*E_s, 2] edge features
     """
@@ -76,9 +77,10 @@ def substrate_to_pyg(G: nx.Graph) -> Data:
             avg_bw   = total_bw / len(nbrs)
 
         clust    = float(cluster.get(n, 0.0))
-        x_rows.append([cpu_av, cpu_ratio, deg, avg_bw, clust])
+        domain   = float(nd.get("domain", 0.0))
+        x_rows.append([cpu_av, cpu_ratio, deg, avg_bw, clust, domain])
 
-    x = torch.tensor(x_rows, dtype=torch.float)  # [N_s, 5]
+    x = torch.tensor(x_rows, dtype=torch.float)  # [N_s, 6]
 
     # --- Edge index + features ---
     edges = list(G.edges(data=True))
@@ -112,7 +114,11 @@ def vnr_to_pyg(G: nx.Graph) -> Data:
     Convert a VNR NetworkX graph to a PyG Data object.
 
     Node attributes expected on G:
-        ``cpu`` — CPU demand  (float/int)
+        ``cpu``    — CPU demand  (float/int)
+        ``domain`` — domain ID   (float/int, optional)
+
+    Graph attributes expected on G:
+        ``lifetime`` — VNR lifetime (float/int, optional)
 
     Edge attributes expected on G:
         ``bw``  — bandwidth demand  (float/int)
@@ -120,13 +126,14 @@ def vnr_to_pyg(G: nx.Graph) -> Data:
     Returns
     -------
     torch_geometric.data.Data
-        x          : [N_v, 4]  node features
+        x          : [N_v, 6]  node features
         edge_index : [2, 2*E_v]
         edge_attr  : [2*E_v, 1] edge features
     """
     nodes     = sorted(G.nodes())
     idx       = {n: i for i, n in enumerate(nodes)}
     total_cpu = sum(float(G.nodes[n].get("cpu", 0.0)) for n in nodes) + 1e-6
+    lifetime  = float(G.graph.get("lifetime", 0.0))
 
     x_rows = []
     for n in nodes:
@@ -135,9 +142,10 @@ def vnr_to_pyg(G: nx.Graph) -> Data:
         nbrs       = list(G.neighbors(n))
         sum_bw     = sum(float(G.edges[n, nb].get("bw", 0.0)) for nb in nbrs)
         cpu_rel    = cpu_d / total_cpu
-        x_rows.append([cpu_d, deg, sum_bw, cpu_rel])
+        domain     = float(G.nodes[n].get("domain", 0.0))
+        x_rows.append([cpu_d, deg, sum_bw, cpu_rel, domain, lifetime])
 
-    x = torch.tensor(x_rows, dtype=torch.float)  # [N_v, 4]
+    x = torch.tensor(x_rows, dtype=torch.float)  # [N_v, 6]
 
     edges = list(G.edges(data=True))
 

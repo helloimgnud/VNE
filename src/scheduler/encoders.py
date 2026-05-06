@@ -6,12 +6,12 @@ GNN encoder modules for the VNR ordering scheduler.
 Architecture (see network_encoder_rl.md §5):
 
 SubstrateGCN
-  GATv2Conv(5→64, heads=4, edge_dim=2) + ReLU + LayerNorm
+  GATv2Conv(6→64, heads=4, edge_dim=2) + ReLU + LayerNorm
   GATv2Conv(256→64, heads=4, edge_dim=2) + ReLU + LayerNorm
   global_mean_pool + global_max_pool → concat → Linear → h_s [128]
 
 VNRGCN
-  GATv2Conv(4→32, heads=4, edge_dim=1) + ReLU + LayerNorm
+  GATv2Conv(6→32, heads=4, edge_dim=1) + ReLU + LayerNorm
   GATv2Conv(128→32, heads=4, edge_dim=1) + ReLU + LayerNorm
   global_mean_pool + global_max_pool → concat → Linear → h_v [64]
 
@@ -45,7 +45,7 @@ class SubstrateGCN(nn.Module):
 
     Parameters
     ----------
-    in_dim   : number of node features  (default 5, see features.py)
+    in_dim   : number of node features  (default 6, see features.py)
     hidden   : attention head width     (default 64)
     heads    : number of GAT heads      (default 4)
     edge_dim : edge feature dimension   (default 2, see features.py)
@@ -54,7 +54,7 @@ class SubstrateGCN(nn.Module):
 
     def __init__(
         self,
-        in_dim:   int = 5,
+        in_dim:   int = 6,
         hidden:   int = 64,
         heads:    int = 4,
         edge_dim: int = 2,
@@ -104,7 +104,7 @@ class VNRGCN(nn.Module):
 
     Parameters
     ----------
-    in_dim   : number of VNR node features  (default 4, see features.py)
+    in_dim   : number of VNR node features  (default 6, see features.py)
     hidden   : attention head width          (default 32)
     heads    : number of GAT heads           (default 4)
     edge_dim : VNR edge feature dimension    (default 1)
@@ -113,7 +113,7 @@ class VNRGCN(nn.Module):
 
     def __init__(
         self,
-        in_dim:   int = 4,
+        in_dim:   int = 6,
         hidden:   int = 32,
         heads:    int = 4,
         edge_dim: int = 1,
